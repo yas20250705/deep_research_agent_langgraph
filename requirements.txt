@@ -8,6 +8,7 @@ langchain-community>=0.0.20
 
 # 検索API
 tavily-python>=0.3.0
+langchain-tavily>=0.1.0
 
 # データモデル & 設定
 pydantic>=2.0.0

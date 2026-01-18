@@ -22,29 +22,49 @@ def get_settings() -> Settings:
     return Settings()
 
 
-def format_research_data(research_data: list) -> str:
+def format_research_data(research_data: list, max_chars: int = None) -> str:
     """
     検索結果を構造化テキストに変換
     
     Args:
         research_data: 検索結果のリスト
+        max_chars: 最大文字数（Noneの場合は制限なし）
     
     Returns:
         構造化されたテキスト
     """
     
     formatted_items = []
+    total_chars = 0
+    
     for i, result in enumerate(research_data, 1):
         item = f"[ソース{i}]\n"
         item += f"タイトル: {result.title}\n"
         item += f"URL: {result.url}\n"
-        item += f"要約: {result.summary}\n"
+        
+        # 要約を制限（最大500文字）
+        summary = result.summary
+        if max_chars and len(summary) > 300:
+            summary = summary[:300] + "..."
+        item += f"要約: {summary}\n"
+        
         if result.relevance_score is not None:
             item += f"関連性スコア: {result.relevance_score:.2f}\n"
         item += "\n"
+        
+        # 文字数制限チェック
+        if max_chars:
+            item_chars = len(item)
+            if total_chars + item_chars > max_chars:
+                # 制限に達した場合は、残りのアイテム数を表示して終了
+                remaining = len(research_data) - i
+                formatted_items.append(f"\n[注意: 残り{remaining}件のソースは省略されました（文字数制限）]\n")
+                break
+            total_chars += item_chars
+        
         formatted_items.append(item)
     
-    return "\n".join(formatted_items)
+    return "".join(formatted_items)
 
 
 def extract_markdown_content(response_content: str) -> str:
@@ -117,18 +137,27 @@ def writer_node(state: ResearchState) -> ResearchState:
         api_key=settings.OPENAI_API_KEY
     )
     
-    # 研究データをテキストに変換
-    research_text = format_research_data(research_data)
+    # 研究データをテキストに変換（トークン数制限を考慮して最大15000文字に制限）
+    # 概算: 1トークン ≈ 4文字、制限30000トークン、プロンプトテンプレートで約5000トークン使用
+    # 残り25000トークン ≈ 100000文字、安全のため15000文字に制限
+    MAX_RESEARCH_DATA_CHARS = 15000
+    research_text = format_research_data(research_data, max_chars=MAX_RESEARCH_DATA_CHARS)
     
-    # フィードバックの考慮
+    # フィードバックの考慮（最大1000文字に制限）
     feedback_context = ""
     if state.get("feedback"):
-        feedback_context = f"\n\n前回のフィードバック:\n{state['feedback']}\n\nこのフィードバックを反映してください。"
+        feedback = state['feedback']
+        if len(feedback) > 1000:
+            feedback = feedback[:1000] + "...（省略）"
+        feedback_context = f"\n\n前回のフィードバック:\n{feedback}\n\nこのフィードバックを反映してください。"
     
-    # 調査観点をフォーマット
+    # 調査観点をフォーマット（最大2000文字に制限）
+    investigation_points = plan.investigation_points
     investigation_points_text = "\n".join(
-        f"- {point}" for point in plan.investigation_points
+        f"- {point}" for point in investigation_points
     )
+    if len(investigation_points_text) > 2000:
+        investigation_points_text = investigation_points_text[:2000] + "...（省略）"
     
     # プロンプト構築
     # 注意: LangChainのテンプレートでは、変数は{変数名}形式で指定
@@ -165,11 +194,65 @@ def writer_node(state: ResearchState) -> ResearchState:
         logger.info(f"Writer実行完了: ドラフト長={len(draft)}文字")
         
     except Exception as e:
-        logger.error(f"ドラフト生成エラー: {e}")
-        state["messages"].append(
-            AIMessage(content=f"ドラフト生成エラー: {str(e)}")
-        )
-        state["next_action"] = "end"
+        logger.error(f"ドラフト生成エラー: {e}", exc_info=True)
+        
+        error_str = str(e).lower()
+        error_msg = str(e)
+        
+        # トークン数超過エラーを検出
+        if "too large" in error_str or "tokens per min" in error_str or "requested" in error_str:
+            # データをさらに削減して再試行
+            logger.warning("トークン数超過エラーを検出。研究データを削減して再試行します。")
+            # 研究データを半分に削減
+            reduced_data = research_data[:len(research_data)//2] if len(research_data) > 1 else research_data
+            reduced_text = format_research_data(reduced_data, max_chars=8000)  # さらに制限
+            
+            try:
+                # 再試行（データを削減）
+                response = call_llm_with_retry(
+                    chain.invoke,
+                    {
+                        "theme": plan.theme,
+                        "investigation_points": investigation_points_text[:1000],  # さらに制限
+                        "research_data": reduced_text,
+                        "feedback": feedback_context[:500] if feedback_context else ""  # さらに制限
+                    }
+                )
+                
+                draft = extract_markdown_content(response.content)
+                state["current_draft"] = draft
+                state["iteration_count"] = state.get("iteration_count", 0) + 1
+                state["messages"].append(
+                    AIMessage(content=f"⚠️ データを削減してドラフトを生成しました（長さ: {len(draft)}文字）")
+                )
+                logger.info(f"Writer実行完了（データ削減版）: ドラフト長={len(draft)}文字")
+                return state
+            except Exception as retry_error:
+                # 再試行も失敗した場合はフォールバック
+                logger.error(f"データ削減後の再試行も失敗: {retry_error}")
+                fallback_draft = f"# {plan.theme}\n\n## 注意\n\nトークン数制限により、収集データを要約してレポートを作成しました。\n\n## 収集データ（要約）\n\n{reduced_text[:2000]}...\n\n## エラー詳細\n\n{error_msg[:500]}"
+                state["current_draft"] = fallback_draft
+                state["messages"].append(
+                    AIMessage(content=f"⚠️ トークン数制限により、要約版ドラフトを生成しました")
+                )
+                state["next_action"] = "review"
+                return state
+        
+        # RateLimitErrorの場合は、リサーチに戻して再試行
+        elif "ratelimit" in error_str or "rate limit" in error_str:
+            state["messages"].append(
+                AIMessage(content=f"⚠️ APIレート制限に達しました。しばらく待ってから再試行します。")
+            )
+            state["next_action"] = "research"  # リサーチに戻して待機
+        else:
+            # その他のエラーの場合は、最小限のドラフトを設定して続行を試みる
+            fallback_draft = f"# {plan.theme}\n\n## エラー\n\nドラフト生成中にエラーが発生しました: {error_msg[:500]}\n\n収集されたデータに基づいて、手動でレポートを作成してください。\n\n## 収集データ（要約）\n\n{research_text[:2000]}..."
+            state["current_draft"] = fallback_draft
+            state["messages"].append(
+                AIMessage(content=f"⚠️ ドラフト生成エラーが発生しましたが、フォールバックドラフトを設定しました")
+            )
+            state["next_action"] = "review"  # レビューに進む
+            logger.warning(f"フォールバックドラフトを設定しました")
     
     return state
 

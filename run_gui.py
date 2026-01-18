@@ -27,6 +27,11 @@ try:
         if parent_env.exists():
             load_dotenv(parent_env)
             print(f".envファイルを読み込みました: {parent_env}")
+        else:
+            print("警告: .envファイルが見つかりません")
+            print(f"  確認したパス:")
+            print(f"    - {env_path}")
+            print(f"    - {parent_env}")
 except ImportError:
     print("警告: python-dotenvがインストールされていません。.envファイルを読み込めません。")
 

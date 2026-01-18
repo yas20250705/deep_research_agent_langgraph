@@ -58,7 +58,7 @@ def get_db_session() -> Generator[Session, None, None]:
         Session: SQLAlchemyセッション
     """
     if not settings.ENABLE_DB_PERSISTENCE:
-        logger.warning("データベース永続化が無効です")
+        logger.debug("データベース永続化が無効です。スキップします。")
         return
     
     SessionLocal = get_session_local()
@@ -74,7 +74,7 @@ def init_db():
     データベースを初期化（テーブル作成）
     """
     if not settings.ENABLE_DB_PERSISTENCE:
-        logger.warning("データベース永続化が無効です。スキップします。")
+        logger.debug("データベース永続化が無効です。スキップします。")
         return
     
     if not settings.DATABASE_URL:

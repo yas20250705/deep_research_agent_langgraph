@@ -59,6 +59,14 @@ else:
     if parent_env.exists():
         load_dotenv(parent_env)
 
+# 設定を読み込む
+try:
+    from src.config.settings import Settings
+    settings = Settings()
+    ENABLE_DB_PERSISTENCE = settings.ENABLE_DB_PERSISTENCE
+except ImportError:
+    ENABLE_DB_PERSISTENCE = False
+
 # APIサーバーのベースURL（デフォルトはローカル）
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:8000")
 
@@ -182,7 +190,7 @@ def init_session_state():
         st.session_state.db_warning_shown = False
     
     # データベース初期化
-    if DB_AVAILABLE:
+    if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
         try:
             init_db()
         except Exception as e:
@@ -201,8 +209,8 @@ def create_research(theme: str, max_iterations: int = 5, enable_human_interventi
     }
     
     try:
-        # リサーチ作成は時間がかかる可能性があるため、タイムアウトを延長
-        response = requests.post(url, json=payload, timeout=60)
+        # リサーチ作成は時間がかかる可能性があるため、タイムアウトを延長（120秒）
+        response = requests.post(url, json=payload, timeout=120)
         response.raise_for_status()
         data = response.json()
         return data["research_id"]
@@ -230,7 +238,7 @@ APIサーバーが起動していない可能性があります。
         return None
     except requests.exceptions.Timeout as e:
         error_msg = f"""
-**⏰ タイムアウトエラー**: APIサーバーからの応答がありませんでした（60秒以内）
+**⏰ タイムアウトエラー**: APIサーバーからの応答がありませんでした（120秒以内）
 
 APIサーバーがリクエストを処理中である可能性があります。
 
@@ -286,8 +294,8 @@ def resume_research(research_id: str, human_input: str) -> bool:
     payload = {"human_input": human_input}
     
     try:
-        # リサーチ再開も時間がかかる可能性があるため、タイムアウトを延長
-        response = requests.post(url, json=payload, timeout=60)
+        # リサーチ再開も時間がかかる可能性があるため、タイムアウトを延長（120秒）
+        response = requests.post(url, json=payload, timeout=120)
         response.raise_for_status()
         return True
     except Exception:
@@ -378,51 +386,53 @@ def save_research_to_history(research_info: Dict):
             st.session_state.research_history = st.session_state.research_history[:50]
     
     # データベースに保存
-    if DB_AVAILABLE:
+    if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
         try:
             db_gen = get_db_session()
-            db = next(db_gen)
-            try:
-                db_save_research_history(
-                    db=db,
-                    research_id=research_info["research_id"],
-                    theme=research_info["theme"],
-                    status=research_info["status"],
-                    title=research_info.get("title"),
-                    metadata_json={
-                        "created_at": research_info.get("created_at")
-                    }
-                )
-            finally:
-                db.close()
+            db = next(db_gen, None)
+            if db is not None:
+                try:
+                    db_save_research_history(
+                        db=db,
+                        research_id=research_info["research_id"],
+                        theme=research_info["theme"],
+                        status=research_info["status"],
+                        title=research_info.get("title"),
+                        metadata_json={
+                            "created_at": research_info.get("created_at")
+                        }
+                    )
+                finally:
+                    db.close()
         except Exception as e:
             logger.warning(f"データベース保存エラー: {e}")
 
 
 def load_research_history_from_db():
     """データベースからリサーチ履歴を読み込む"""
-    if not DB_AVAILABLE:
+    if not DB_AVAILABLE or not ENABLE_DB_PERSISTENCE:
         return
     
     try:
         db_gen = get_db_session()
-        db = next(db_gen)
-        try:
-            db_history = db_get_all_research_history(db, limit=50)
-            # セッション状態に反映
-            for research in db_history:
-                research_info = {
-                    "research_id": research.research_id,
-                    "theme": research.theme,
-                    "status": research.status,
-                    "created_at": research.created_at.isoformat() if research.created_at else datetime.now().isoformat(),
-                    "title": research.title or research.theme[:50] + "..." if len(research.theme) > 50 else research.theme
-                }
-                # 重複チェック
-                if not any(h["research_id"] == research_info["research_id"] for h in st.session_state.research_history):
-                    st.session_state.research_history.append(research_info)
-        finally:
-            db.close()
+        db = next(db_gen, None)
+        if db is not None:
+            try:
+                db_history = db_get_all_research_history(db, limit=50)
+                # セッション状態に反映
+                for research in db_history:
+                    research_info = {
+                        "research_id": research.research_id,
+                        "theme": research.theme,
+                        "status": research.status,
+                        "created_at": research.created_at.isoformat() if research.created_at else datetime.now().isoformat(),
+                        "title": research.title or research.theme[:50] + "..." if len(research.theme) > 50 else research.theme
+                    }
+                    # 重複チェック
+                    if not any(h["research_id"] == research_info["research_id"] for h in st.session_state.research_history):
+                        st.session_state.research_history.append(research_info)
+            finally:
+                db.close()
     except Exception as e:
         logger.warning(f"データベース読み込みエラー: {e}")
 
@@ -531,12 +541,12 @@ def render_sidebar():
             st.rerun()
         
         # DBから履歴を読み込むボタン
-        if DB_AVAILABLE:
+        if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
             if st.button("🔄 DBから履歴を読み込み", use_container_width=True):
                 load_research_history_from_db()
                 st.success("データベースから履歴を読み込みました")
                 st.rerun()
-        else:
+        elif not ENABLE_DB_PERSISTENCE:
             # データベースが利用できない場合の情報表示
             st.info("ℹ️ データベース永続化は無効です。設定方法はREADME_DB.mdを参照してください。")
         
@@ -653,21 +663,22 @@ python -m uvicorn src.api.main:app --reload
             st.markdown("---")
     
     # DBからメッセージを読み込む（初回のみ）
-    if DB_AVAILABLE and not st.session_state.get("messages_loaded_from_db", False):
+    if DB_AVAILABLE and ENABLE_DB_PERSISTENCE and not st.session_state.get("messages_loaded_from_db", False):
         try:
             db_gen = get_db_session()
-            db = next(db_gen)
-            try:
-                db_messages = get_messages(db, st.session_state.conversation_id)
-                if db_messages and not st.session_state.messages:
-                    # DBからメッセージを読み込む
-                    for db_msg in db_messages:
-                        st.session_state.messages.append({
-                            "role": db_msg.role,
-                            "content": db_msg.content
-                        })
-            finally:
-                db.close()
+            db = next(db_gen, None)
+            if db is not None:
+                try:
+                    db_messages = get_messages(db, st.session_state.conversation_id)
+                    if db_messages and not st.session_state.messages:
+                        # DBからメッセージを読み込む
+                        for db_msg in db_messages:
+                            st.session_state.messages.append({
+                                "role": db_msg.role,
+                                "content": db_msg.content
+                            })
+                finally:
+                    db.close()
             st.session_state.messages_loaded_from_db = True
         except Exception as e:
             logger.warning(f"DBメッセージ読み込みエラー: {e}")
@@ -739,14 +750,15 @@ python -m uvicorn src.api.main:app --reload
             st.session_state.messages.append({"role": "user", "content": prompt})
             
             # DBにメッセージを保存
-            if DB_AVAILABLE:
+            if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
                 try:
                     db_gen = get_db_session()
-                    db = next(db_gen)
-                    try:
-                        add_message(db, st.session_state.conversation_id, "user", prompt)
-                    finally:
-                        db.close()
+                    db = next(db_gen, None)
+                    if db is not None:
+                        try:
+                            add_message(db, st.session_state.conversation_id, "user", prompt)
+                        finally:
+                            db.close()
                 except Exception as e:
                     logger.warning(f"DBメッセージ保存エラー: {e}")
         
@@ -781,14 +793,15 @@ python -m uvicorn src.api.main:app --reload
                     st.session_state.messages.append({"role": "assistant", "content": response})
                     
                     # DBにメッセージを保存
-                    if DB_AVAILABLE:
+                    if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
                         try:
                             db_gen = get_db_session()
-                            db = next(db_gen)
-                            try:
-                                add_message(db, st.session_state.conversation_id, "assistant", response)
-                            finally:
-                                db.close()
+                            db = next(db_gen, None)
+                            if db is not None:
+                                try:
+                                    add_message(db, st.session_state.conversation_id, "assistant", response)
+                                finally:
+                                    db.close()
                         except Exception as e:
                             logger.warning(f"DBメッセージ保存エラー: {e}")
                     
@@ -923,21 +936,22 @@ def monitor_research_progress(research_id: str):
                                 research["title"] = title
                                 
                                 # DBのタイトルも更新
-                                if DB_AVAILABLE:
+                                if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
                                     try:
                                         db_gen = get_db_session()
-                                        db = next(db_gen)
-                                        try:
-                                            db_save_research_history(
-                                                db=db,
-                                                research_id=research_id,
-                                                theme=theme,
-                                                status="completed",
-                                                title=title,
-                                                metadata_json=result.get("statistics")
-                                            )
-                                        finally:
-                                            db.close()
+                                        db = next(db_gen, None)
+                                        if db is not None:
+                                            try:
+                                                db_save_research_history(
+                                                    db=db,
+                                                    research_id=research_id,
+                                                    theme=theme,
+                                                    status="completed",
+                                                    title=title,
+                                                    metadata_json=result.get("statistics")
+                                                )
+                                            finally:
+                                                db.close()
                                     except Exception as e:
                                         logger.warning(f"DBタイトル更新エラー: {e}")
                             break
@@ -952,14 +966,15 @@ def monitor_research_progress(research_id: str):
                     st.session_state.messages.append({"role": "assistant", "content": completion_msg})
                     
                     # DBにメッセージを保存
-                    if DB_AVAILABLE:
+                    if DB_AVAILABLE and ENABLE_DB_PERSISTENCE:
                         try:
                             db_gen = get_db_session()
-                            db = next(db_gen)
-                            try:
-                                add_message(db, st.session_state.conversation_id, "assistant", completion_msg)
-                            finally:
-                                db.close()
+                            db = next(db_gen, None)
+                            if db is not None:
+                                try:
+                                    add_message(db, st.session_state.conversation_id, "assistant", completion_msg)
+                                finally:
+                                    db.close()
                         except Exception as e:
                             logger.warning(f"DBメッセージ保存エラー: {e}")
                 else:

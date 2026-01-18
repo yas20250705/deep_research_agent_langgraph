@@ -32,8 +32,8 @@ def call_llm_with_retry(llm_func: Callable, *args, **kwargs) -> Any:
     """
     
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=4, max=10),
+        stop=stop_after_attempt(5),  # リトライ回数を3→5に増加
+        wait=wait_exponential(multiplier=2, min=8, max=60),  # 待機時間を延長（最小8秒、最大60秒）
         retry=retry_if_exception_type((openai.APIError, openai.APIConnectionError, openai.RateLimitError))
     )
     def _retry_wrapper():

@@ -18,12 +18,21 @@ echo   - Window 1: API Server
 echo   - Window 2: GUI Application
 echo.
 echo Starting API Server...
+REM Python実行ファイルのパスを決定
 if exist "venv\Scripts\python.exe" (
     set "PYTHON_EXE=venv\Scripts\python.exe"
+    echo Using virtual environment Python: %PYTHON_EXE%
 ) else (
     set "PYTHON_EXE=python"
+    echo Using system Python: %PYTHON_EXE%
+    echo WARNING: Virtual environment not found. Using system Python.
 )
-start "API Server" cmd /k "cd /d %SCRIPT_DIR% && set PYTHON_EXE=%PYTHON_EXE% && call start_api_server.bat"
+echo.
+
+REM 環境変数を正しく渡すために、変数を展開してからstartコマンドを実行
+REM パスにスペースが含まれる可能性があるため、引用符で囲む
+set "PYTHON_PATH=%PYTHON_EXE%"
+start "API Server" cmd /k "cd /d "%SCRIPT_DIR%" && set PYTHON_EXE=%PYTHON_PATH% && call start_api_server.bat"
 echo Waiting for API server to start...
 timeout /t 5 /nobreak >nul
 echo Checking API server status...
@@ -59,7 +68,9 @@ goto :wait_for_api
 :api_ready
 echo.
 echo Starting GUI Application...
-start "GUI Application" cmd /k "cd /d %SCRIPT_DIR% && set PYTHON_EXE=%PYTHON_EXE% && call start_gui.bat"
+REM 環境変数を正しく渡すために、変数を展開してからstartコマンドを実行
+REM パスにスペースが含まれる可能性があるため、引用符で囲む
+start "GUI Application" cmd /k "cd /d "%SCRIPT_DIR%" && set PYTHON_EXE=%PYTHON_PATH% && call start_gui.bat"
 timeout /t 2 /nobreak >nul
 echo.
 echo ============================================================
