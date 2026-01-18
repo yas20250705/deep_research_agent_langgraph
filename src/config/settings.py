@@ -17,9 +17,16 @@ _env_file = _project_root / ".env"
 class Settings(BaseSettings):
     """アプリケーション設定"""
     
+    # LLMプロバイダー設定
+    LLM_PROVIDER: str = "openai"  # "openai" または "gemini"
+    
     # OpenAI設定
     OPENAI_API_KEY: str = ""
     OPENAI_MODEL: str = "gpt-4o"
+    
+    # Gemini設定
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3-flash"  # 利用可能なモデル: gemini-pro, gemini-1.5-pro-latest, gemini-1.5-flash-latest, gemini-3-flash
     
     # Tavily設定
     TAVILY_API_KEY: str = ""

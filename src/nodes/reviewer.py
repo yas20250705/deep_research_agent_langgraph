@@ -7,13 +7,13 @@ Reviewerノード実装
 import json
 import logging
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
 from src.graph.state import ResearchState
 from src.prompts.reviewer_prompt import REVIEWER_SYSTEM_PROMPT, REVIEWER_USER_PROMPT
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
 from src.utils.retry import call_llm_with_retry
+from src.utils.llm_factory import get_llm_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -66,19 +66,43 @@ def format_task_plan_for_review(plan) -> str:
     return text
 
 
-def parse_evaluation_result(evaluation_text: str) -> dict:
+def parse_evaluation_result(evaluation_text) -> dict:
     """
     評価結果をパース
     
     Args:
-        evaluation_text: LLMの評価応答
+        evaluation_text: LLMの評価応答（文字列またはリスト）
     
     Returns:
         パースされた評価結果
     """
     
     try:
-        content = evaluation_text
+        # リストの場合は各要素を処理
+        if isinstance(evaluation_text, list):
+            extracted_texts = []
+            for item in evaluation_text:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted_texts.append(item['text'])
+                elif item:
+                    extracted_texts.append(str(item))
+            content = "".join(extracted_texts)
+        # 辞書形式の場合は'text'キーから取得
+        elif isinstance(evaluation_text, dict):
+            if 'text' in evaluation_text:
+                content = evaluation_text['text']
+            elif 'content' in evaluation_text:
+                content = evaluation_text['content']
+            else:
+                # 辞書全体を文字列に変換
+                content = str(evaluation_text)
+        else:
+            content = str(evaluation_text) if evaluation_text else ""
+        
+        # 空文字列チェック
+        if not content or not content.strip():
+            logger.warning(f"評価結果テキストが空です: evaluation_text={evaluation_text}")
+            raise ValueError("評価結果テキストが空です")
         
         # JSONコードブロックを除去
         if "```json" in content:
@@ -88,6 +112,11 @@ def parse_evaluation_result(evaluation_text: str) -> dict:
             if len(parts) >= 3:
                 content = parts[1].split("\n", 1)[1] if "\n" in parts[1] else parts[2]
                 content = content.rsplit("```", 1)[0].strip()
+        
+        # 再チェック（コードブロック除去後）
+        if not content or not content.strip():
+            logger.warning(f"コードブロック除去後、コンテンツが空です。元の応答: {evaluation_text}")
+            raise ValueError("コンテンツが空です")
         
         result = json.loads(content)
         
@@ -106,8 +135,8 @@ def parse_evaluation_result(evaluation_text: str) -> dict:
             "issues": result.get("issues", [])
         }
         
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"評価結果パースエラー: {e}")
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.error(f"評価結果パースエラー: {e}, evaluation_text={evaluation_text if evaluation_text else 'N/A'}")
         # フォールバック: デフォルト評価
         return {
             "approved": False,
@@ -154,11 +183,7 @@ def reviewer_node(state: ResearchState) -> ResearchState:
         return state
     
     settings = get_settings()
-    llm = ChatOpenAI(
-        model=settings.OPENAI_MODEL,
-        temperature=0,  # 厳密な評価のため
-        api_key=settings.OPENAI_API_KEY
-    )
+    llm = get_llm_from_settings(settings, temperature=0)  # 厳密な評価のため
     
     # 評価プロンプト構築
     research_data_text = format_research_data_for_review(state.get("research_data", []))

@@ -7,13 +7,13 @@ Writerノード実装
 import re
 import logging
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import AIMessage
 from src.graph.state import ResearchState
 from src.prompts.writer_prompt import WRITER_SYSTEM_PROMPT, WRITER_USER_PROMPT
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
 from src.utils.retry import call_llm_with_retry
+from src.utils.llm_factory import get_llm_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -67,18 +67,37 @@ def format_research_data(research_data: list, max_chars: int = None) -> str:
     return "".join(formatted_items)
 
 
-def extract_markdown_content(response_content: str) -> str:
+def extract_markdown_content(response_content) -> str:
     """
     LLMの応答からマークダウンコンテンツを抽出
     
     Args:
-        response_content: LLMの応答
+        response_content: LLMの応答（文字列、リスト、または辞書）
     
     Returns:
         マークダウンのみのコンテンツ
     """
     
-    content = response_content
+    # リストの場合は各要素を処理
+    if isinstance(response_content, list):
+        extracted_texts = []
+        for item in response_content:
+            if isinstance(item, dict) and 'text' in item:
+                extracted_texts.append(item['text'])
+            elif item:
+                extracted_texts.append(str(item))
+        content = "".join(extracted_texts)
+    # 辞書形式の場合は'text'キーから取得
+    elif isinstance(response_content, dict):
+        if 'text' in response_content:
+            content = response_content['text']
+        elif 'content' in response_content:
+            content = response_content['content']
+        else:
+            # 辞書全体を文字列に変換
+            content = str(response_content)
+    else:
+        content = str(response_content) if response_content else ""
     
     # コードブロックを除去
     if "```markdown" in content:
@@ -131,11 +150,7 @@ def writer_node(state: ResearchState) -> ResearchState:
         return state
     
     settings = get_settings()
-    llm = ChatOpenAI(
-        model=settings.OPENAI_MODEL,
-        temperature=0.3,
-        api_key=settings.OPENAI_API_KEY
-    )
+    llm = get_llm_from_settings(settings, temperature=0.3)
     
     # 研究データをテキストに変換（トークン数制限を考慮して最大15000文字に制限）
     # 概算: 1トークン ≈ 4文字、制限30000トークン、プロンプトテンプレートで約5000トークン使用
@@ -182,6 +197,7 @@ def writer_node(state: ResearchState) -> ResearchState:
         )
         
         # ドラフトを保存
+        # response.contentが辞書、リスト、または文字列の場合に対応
         draft = extract_markdown_content(response.content)
         state["current_draft"] = draft
         state["iteration_count"] = state.get("iteration_count", 0) + 1
@@ -219,6 +235,7 @@ def writer_node(state: ResearchState) -> ResearchState:
                     }
                 )
                 
+                # response.contentが辞書、リスト、または文字列の場合に対応
                 draft = extract_markdown_content(response.content)
                 state["current_draft"] = draft
                 state["iteration_count"] = state.get("iteration_count", 0) + 1

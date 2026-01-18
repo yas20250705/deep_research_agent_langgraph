@@ -91,9 +91,9 @@ class TestSupervisorNode:
         assert 0.0 <= progress["data_quality"] <= 1.0
         assert 0.0 <= progress["coverage"] <= 1.0
     
-    @patch('src.nodes.supervisor.ChatOpenAI')
+    @patch('src.nodes.supervisor.get_llm_from_settings')
     @patch('src.nodes.supervisor.call_llm_with_retry')
-    def test_supervisor_generates_plan(self, mock_retry, mock_llm_class, mock_state):
+    def test_supervisor_generates_plan(self, mock_retry, mock_get_llm, mock_state):
         """Supervisorが計画を生成"""
         # LLMのモック
         mock_response = Mock()
@@ -109,7 +109,7 @@ class TestSupervisorNode:
         mock_retry.return_value = mock_response
         
         mock_llm = Mock()
-        mock_llm_class.return_value = mock_llm
+        mock_get_llm.return_value = mock_llm
         
         result = supervisor_node(mock_state)
         
@@ -180,9 +180,9 @@ class TestResearcherNode:
 class TestWriterNode:
     """Writerノードのテスト"""
     
-    @patch('src.nodes.writer.ChatOpenAI')
+    @patch('src.nodes.writer.get_llm_from_settings')
     @patch('src.nodes.writer.call_llm_with_retry')
-    def test_writer_generates_draft(self, mock_retry, mock_llm_class, mock_state, mock_plan):
+    def test_writer_generates_draft(self, mock_retry, mock_get_llm, mock_state, mock_plan):
         """Writerがドラフトを生成"""
         mock_state["task_plan"] = mock_plan
         mock_state["research_data"] = [
@@ -201,7 +201,7 @@ class TestWriterNode:
         mock_retry.return_value = mock_response
         
         mock_llm = Mock()
-        mock_llm_class.return_value = mock_llm
+        mock_get_llm.return_value = mock_llm
         
         result = writer_node(mock_state)
         
@@ -212,9 +212,9 @@ class TestWriterNode:
 class TestReviewerNode:
     """Reviewerノードのテスト"""
     
-    @patch('src.nodes.reviewer.ChatOpenAI')
+    @patch('src.nodes.reviewer.get_llm_from_settings')
     @patch('src.nodes.reviewer.call_llm_with_retry')
-    def test_reviewer_evaluates_draft(self, mock_retry, mock_llm_class, mock_state, mock_plan):
+    def test_reviewer_evaluates_draft(self, mock_retry, mock_get_llm, mock_state, mock_plan):
         """Reviewerがドラフトを評価"""
         mock_state["task_plan"] = mock_plan
         mock_state["current_draft"] = "# テストテーマ\n\n## Executive Summary\nテストサマリー\n\n## Key Findings\n1. 発見1\n\n## Detailed Analysis\n詳細な分析（100文字以上）" * 2
@@ -246,16 +246,16 @@ class TestReviewerNode:
         mock_retry.return_value = mock_response
         
         mock_llm = Mock()
-        mock_llm_class.return_value = mock_llm
+        mock_get_llm.return_value = mock_llm
         
         result = reviewer_node(mock_state)
         
         assert result["feedback"] is not None
         assert result["next_action"] in ["research", "write", "end"]
     
-    @patch('src.nodes.reviewer.ChatOpenAI')
+    @patch('src.nodes.reviewer.get_llm_from_settings')
     @patch('src.nodes.reviewer.call_llm_with_retry')
-    def test_reviewer_approves_draft(self, mock_retry, mock_llm_class, mock_state, mock_plan):
+    def test_reviewer_approves_draft(self, mock_retry, mock_get_llm, mock_state, mock_plan):
         """ドラフトが承認された場合、終了"""
         mock_state["task_plan"] = mock_plan
         mock_state["current_draft"] = "# テストテーマ\n\n## Executive Summary\nテストサマリー\n\n## Key Findings\n1. 発見1\n\n## Detailed Analysis\n詳細な分析（100文字以上）" * 2
@@ -280,7 +280,7 @@ class TestReviewerNode:
         mock_retry.return_value = mock_response
         
         mock_llm = Mock()
-        mock_llm_class.return_value = mock_llm
+        mock_get_llm.return_value = mock_llm
         
         result = reviewer_node(mock_state)
         

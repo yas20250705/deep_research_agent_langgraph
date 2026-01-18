@@ -88,12 +88,12 @@ class TestRouting:
 class TestGraphFlow:
     """グラフフローのテスト"""
     
-    @patch('src.nodes.supervisor.ChatOpenAI')
+    @patch('src.nodes.supervisor.get_llm_from_settings')
     @patch('src.nodes.supervisor.call_llm_with_retry')
     @patch('src.nodes.researcher.tavily_search_tool')
-    @patch('src.nodes.writer.ChatOpenAI')
+    @patch('src.nodes.writer.get_llm_from_settings')
     @patch('src.nodes.writer.call_llm_with_retry')
-    @patch('src.nodes.reviewer.ChatOpenAI')
+    @patch('src.nodes.reviewer.get_llm_from_settings')
     @patch('src.nodes.reviewer.call_llm_with_retry')
     def test_basic_flow(
         self,

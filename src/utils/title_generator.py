@@ -1,14 +1,14 @@
 """
 LLMタイトル生成ユーティリティ
 
-OpenAI APIを使用してタイトルを生成
+LLMを使用してタイトルを生成
 """
 
 from typing import Optional
-from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from src.config.settings import Settings
 from src.utils.logger import setup_logger
+from src.utils.llm_factory import get_llm_from_settings
 
 logger = setup_logger()
 settings = Settings()
@@ -31,11 +31,7 @@ def generate_title_with_llm(
         生成されたタイトル
     """
     try:
-        llm = ChatOpenAI(
-            model=settings.OPENAI_MODEL,
-            temperature=0.3,  # 創造性を抑える
-            api_key=settings.OPENAI_API_KEY
-        )
+        llm = get_llm_from_settings(settings, temperature=0.3)  # 創造性を抑える
         
         # プロンプトテンプレート
         if draft_content:
@@ -94,7 +90,29 @@ def generate_title_with_llm(
         
         # LLMを呼び出し
         response = llm.invoke(prompt)
-        title = response.content.strip()
+        # response.contentが辞書、リスト、または文字列の場合に対応
+        content = response.content
+        # リストの場合は各要素を処理
+        if isinstance(content, list):
+            extracted_texts = []
+            for item in content:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted_texts.append(item['text'])
+                elif item:
+                    extracted_texts.append(str(item))
+            content = "".join(extracted_texts)
+        # 辞書形式の場合は'text'キーから取得
+        elif isinstance(content, dict):
+            if 'text' in content:
+                content = content['text']
+            elif 'content' in content:
+                content = content['content']
+            else:
+                # 辞書全体を文字列に変換
+                content = str(content)
+        else:
+            content = str(content) if content else ""
+        title = content.strip()
         
         # 引用符を削除
         title = title.strip('"').strip("'")

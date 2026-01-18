@@ -8,7 +8,7 @@ from typing import Dict, Any, Tuple
 import json
 import logging
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_openai import ChatOpenAI
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from src.graph.state import ResearchState
 from src.schemas.data_models import ResearchPlan
@@ -16,6 +16,7 @@ from src.prompts.supervisor_prompt import SUPERVISOR_PLANNING_PROMPT, SUPERVISOR
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
 from src.utils.retry import call_llm_with_retry
+from src.utils.llm_factory import get_llm_from_settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ def extract_theme(message: str) -> str:
 def generate_research_plan(
     theme: str,
     state: ResearchState,
-    llm: ChatOpenAI
+    llm: BaseChatModel
 ) -> ResearchPlan:
     """
     調査計画を生成
@@ -84,11 +85,42 @@ def generate_research_plan(
     # JSONパース
     try:
         content = response.content
+        # リストの場合は各要素を処理
+        if isinstance(content, list):
+            extracted_texts = []
+            for item in content:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted_texts.append(item['text'])
+                elif item:
+                    extracted_texts.append(str(item))
+            content = "".join(extracted_texts)
+        # 辞書形式の場合は'text'キーから取得
+        elif isinstance(content, dict):
+            if 'text' in content:
+                content = content['text']
+            elif 'content' in content:
+                content = content['content']
+            else:
+                # 辞書全体を文字列に変換
+                content = str(content)
+        else:
+            content = str(content) if content else ""
+        
+        # 空文字列チェック
+        if not content or not content.strip():
+            logger.warning(f"LLM応答が空です: response.content={response.content}")
+            raise ValueError("LLM応答が空です")
+        
         # JSONコードブロックを除去
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
+        
+        # 再チェック（コードブロック除去後）
+        if not content or not content.strip():
+            logger.warning(f"コードブロック除去後、コンテンツが空です。元の応答: {response.content}")
+            raise ValueError("コンテンツが空です")
         
         plan_data = json.loads(content)
         
@@ -104,8 +136,8 @@ def generate_research_plan(
         
         return plan
         
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.error(f"計画生成のパースエラー: {e}")
+    except (json.JSONDecodeError, KeyError, ValueError) as e:
+        logger.error(f"計画生成のパースエラー: {e}, response.content={response.content if hasattr(response, 'content') else 'N/A'}")
         # フォールバック: 簡易計画を作成
         return ResearchPlan(
             theme=theme,
@@ -152,7 +184,7 @@ def evaluate_progress(state: ResearchState) -> Dict[str, Any]:
 def decide_next_action(
     state: ResearchState,
     progress: Dict[str, Any],
-    llm: ChatOpenAI
+    llm: BaseChatModel
 ) -> Tuple[str, str]:
     """
     次のアクションを決定
@@ -201,11 +233,42 @@ def decide_next_action(
         response = call_llm_with_retry(chain.invoke, {})
         content = response.content
         
+        # リストの場合は各要素を処理
+        if isinstance(content, list):
+            extracted_texts = []
+            for item in content:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted_texts.append(item['text'])
+                elif item:
+                    extracted_texts.append(str(item))
+            content = "".join(extracted_texts)
+        # 辞書形式の場合は'text'キーから取得
+        elif isinstance(content, dict):
+            if 'text' in content:
+                content = content['text']
+            elif 'content' in content:
+                content = content['content']
+            else:
+                # 辞書全体を文字列に変換
+                content = str(content)
+        else:
+            content = str(content) if content else ""
+        
+        # 空文字列チェック
+        if not content or not content.strip():
+            logger.warning(f"LLM応答が空です: response.content={response.content}")
+            raise ValueError("LLM応答が空です")
+        
         # JSONパース
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
+        
+        # 再チェック
+        if not content or not content.strip():
+            logger.warning(f"コードブロック除去後、コンテンツが空です。元の応答: {response.content}")
+            raise ValueError("コンテンツが空です")
         
         result = json.loads(content)
         next_action = result.get("next_action", "research")
@@ -214,7 +277,7 @@ def decide_next_action(
         return next_action, reasoning
         
     except Exception as e:
-        logger.error(f"ルーティング決定エラー: {e}")
+        logger.error(f"ルーティング決定エラー: {e}, response.content={response.content if hasattr(response, 'content') else 'N/A'}")
         # フォールバック: デフォルトアクション
         return "research", "デフォルトアクション（エラー時）"
 
@@ -239,11 +302,7 @@ def supervisor_node(state: ResearchState) -> ResearchState:
     """
     
     settings = get_settings()
-    llm = ChatOpenAI(
-        model=settings.OPENAI_MODEL,
-        temperature=0,
-        api_key=settings.OPENAI_API_KEY
-    )
+    llm = get_llm_from_settings(settings, temperature=0)
     
     # ステップ1: テーマ抽出
     user_message = extract_user_message(state["messages"])
