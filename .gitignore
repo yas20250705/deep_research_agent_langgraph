@@ -19,40 +19,54 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
 
 # Virtual Environment
 venv/
 ENV/
 env/
 .venv
+env.bak/
+venv.bak/
 
 # IDE
 .vscode/
 .idea/
 *.swp
 *.swo
-*~
+*.sublime-project
+*.sublime-workspace
+.cursor/
 
 # Environment variables
 .env
 .env.local
 .env.*.local
+.env.*.backup
 
 # Logs
 *.log
 logs/
+*.log.*
 
 # Testing
 .pytest_cache/
 .coverage
+.coverage.*
 htmlcov/
 .tox/
 .hypothesis/
+test-results/
+.pytest/
 
 # MyPy
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+# Type checking
+.pytype/
+.pyre/
 
 # Redis
 dump.rdb
@@ -60,17 +74,81 @@ dump.rdb
 # OS
 .DS_Store
 Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
 
-# Project specific
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/config.toml.local
+.streamlit/cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# Project specific - Deep Research Agent LangGraph
 checkpoints/
+langgraph_checkpoints/
+*.checkpoint
+output/
 *.db
 *.sqlite
+*.sqlite3
 
+# PostgreSQL (if using local dumps)
+*.sql
+*.dump
+pgdata/
 
+# Temporary and backup files
+*.tmp
+*.temp
+*.bak
+*.md.bak
+*_copy.py
+*_backup.py
+*_old.py
+*~
 
+# API keys and secrets
+secrets.json
+config.json
+*.key
+*.pem
 
+# Cache directories
+.cache/
+*.cache
 
+# FastAPI/API
+*.pid
+*.sock
 
+# Local configuration
+local_settings.py
+local_config.py
 
+# LangGraph specific
+langgraph_*.json
+.langsmith/
 
+# Windows specific
+*.lnk
+
+# MacOS specific
+.AppleDouble
+.LSOverride
+
+# Linux specific
+.fuse_hidden*
+.directory
+.Trash-*
+
+# Profiling
+*.prof
+*.lprof
+
+# Coverage reports (additional)
+coverage.xml
+*.cover
 
