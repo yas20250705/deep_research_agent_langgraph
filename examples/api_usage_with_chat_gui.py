@@ -209,8 +209,9 @@ def create_research(theme: str, max_iterations: int = 5, enable_human_interventi
     }
     
     try:
-        # リサーチ作成は時間がかかる可能性があるため、タイムアウトを延長（120秒）
-        response = requests.post(url, json=payload, timeout=120)
+        # リサーチ作成は時間がかかる可能性があるため、タイムアウトを延長（300秒）
+        # LLM要約処理を含むため、十分な時間を確保
+        response = requests.post(url, json=payload, timeout=300)
         response.raise_for_status()
         data = response.json()
         return data["research_id"]
@@ -238,7 +239,7 @@ APIサーバーが起動していない可能性があります。
         return None
     except requests.exceptions.Timeout as e:
         error_msg = f"""
-**⏰ タイムアウトエラー**: APIサーバーからの応答がありませんでした（120秒以内）
+**⏰ タイムアウトエラー**: APIサーバーからの応答がありませんでした（300秒以内）
 
 APIサーバーがリクエストを処理中である可能性があります。
 
@@ -294,8 +295,9 @@ def resume_research(research_id: str, human_input: str) -> bool:
     payload = {"human_input": human_input}
     
     try:
-        # リサーチ再開も時間がかかる可能性があるため、タイムアウトを延長（120秒）
-        response = requests.post(url, json=payload, timeout=120)
+        # リサーチ再開も時間がかかる可能性があるため、タイムアウトを延長（300秒）
+        # LLM要約処理を含むため、十分な時間を確保
+        response = requests.post(url, json=payload, timeout=300)
         response.raise_for_status()
         return True
     except Exception:

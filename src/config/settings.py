@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     MAX_ITERATIONS: int = 5
     MAX_SEARCH_RESULTS: int = 10
     MAX_RESULTS_PER_QUERY: int = 5
+    SUMMARY_MAX_LENGTH: int = 300  # URL要約の最大文字数（デフォルト300文字）
     
     # LangSmith設定（オプション）
     LANGCHAIN_TRACING_V2: bool = False
