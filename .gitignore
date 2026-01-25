@@ -1,4 +1,9 @@
+# LangGraph搭載 自律型リサーチエージェント - .gitignore
+# Python 3.10以上が必要です
+
+# ============================================
 # Python
+# ============================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -26,7 +31,9 @@ share/python-wheels/
 MANIFEST
 .python-version
 
+# ============================================
 # Virtual Environment
+# ============================================
 venv/
 ENV/
 env/
@@ -34,14 +41,19 @@ env/
 env.bak/
 venv.bak/
 
+# ============================================
 # IDE
+# ============================================
 .vscode/
 .idea/
 *.sublime-project
 *.sublime-workspace
 .cursor/
+*.code-workspace
 
+# ============================================
 # Environment variables
+# ============================================
 .env
 .env.local
 .env.*.local
@@ -49,12 +61,20 @@ venv.bak/
 .env.*
 !.env_example
 
+# ============================================
 # Logs
+# ============================================
 *.log
 logs/
 *.log.*
+*.log.*.*
+app.log
+error.log
+debug.log
 
+# ============================================
 # Testing
+# ============================================
 .pytest_cache/
 .coverage
 .coverage.*
@@ -64,38 +84,80 @@ htmlcov/
 test-results/
 .pytest/
 .nox/
+.pytest_cache/
+.coverage.rc
 
+# ============================================
 # MyPy
+# ============================================
 .mypy_cache/
 .dmypy.json
 dmypy.json
 .mypy.ini.local
 
+# ============================================
 # Type checking
+# ============================================
 .pytype/
 .pyre/
 
+# ============================================
 # Redis
+# ============================================
 dump.rdb
+*.rdb
 
+# ============================================
 # OS
+# ============================================
 .DS_Store
 desktop.ini
+Desktop.ini
+$RECYCLE.BIN/
+ehthumbs.db
+Thumbs.db
+.AppleDouble
+.LSOverride
+.fuse_hidden*
+.directory
+.Trash-*
 
+# ============================================
 # Streamlit
+# ============================================
 .streamlit/secrets.toml
 .streamlit/config.toml.local
 .streamlit/cache/
+.streamlit/sessions/
+.streamlit/state/
+*.streamlit/
 
+# ============================================
 # Jupyter Notebook
+# ============================================
 .ipynb_checkpoints
 *.ipynb_checkpoints/
 
+# ============================================
 # Project specific - Deep Research Agent LangGraph
+# ============================================
+# Checkpoints
 checkpoints/
 langgraph_checkpoints/
 *.checkpoint
+*.checkpoint.*
+
+# Output files
 output/
+output/**/*
+!output/.gitkeep
+
+# Generated reports
+report_*.md
+report_*.pdf
+report_*.txt
+
+# Database files
 *.db
 *.sqlite
 *.sqlite3
@@ -108,7 +170,21 @@ output/
 *.dump
 pgdata/
 
+# ============================================
+# PDF files (generated/downloaded)
+# ============================================
+# Generated PDF files in output directory
+output/*.pdf
+# Temporary PDF files
+*.pdf.tmp
+*.pdf.temp
+# Downloaded PDF files (user-specific)
+downloads/*.pdf
+temp_pdf_*.pdf
+
+# ============================================
 # Temporary and backup files
+# ============================================
 *.tmp
 *.temp
 *.bak
@@ -122,30 +198,54 @@ pgdata/
 *~
 *.swp
 *.swo
+*.old
 
+# ============================================
 # API keys and secrets
+# ============================================
 secrets.json
 config.json
 *.key
 *.pem
+*.p12
+*.pfx
+api_keys.txt
+credentials.json
 
+# ============================================
 # Cache directories
+# ============================================
 .cache/
 *.cache
+.cache/**
+__cache__/
 
+# ============================================
 # FastAPI/API
+# ============================================
 *.pid
 *.sock
+uvicorn.pid
 
+# ============================================
 # Local configuration
+# ============================================
 local_settings.py
 local_config.py
+settings_local.py
+config_local.py
 
+# ============================================
 # LangGraph specific
+# ============================================
 langgraph_*.json
 .langsmith/
+.langsmith/**
+langsmith_*.json
 
+# ============================================
 # Windows specific
+# ============================================
 *.lnk
 *.exe
 *.msi
@@ -156,39 +256,101 @@ $RECYCLE.BIN/
 ehthumbs.db
 Thumbs.db
 
+# ============================================
 # MacOS specific
+# ============================================
 .AppleDouble
 .LSOverride
+Icon
+._*
 
+# ============================================
 # Linux specific
+# ============================================
 .fuse_hidden*
 .directory
 .Trash-*
+.nfs*
 
+# ============================================
 # Profiling
+# ============================================
 *.prof
 *.lprof
+*.pstats
 
-# Coverage reports (additional)
+# ============================================
+# Coverage reports
+# ============================================
 coverage.xml
 *.cover
 .coverage.rc
+.coverage.*
+htmlcov/
 
+# ============================================
 # Additional Python tools
+# ============================================
 .ruff_cache/
 .pylint.d/
 .flake8
+.mypy_cache/
+.pytype/
+.pyre/
 
+# ============================================
 # Node.js (if any tools use it)
+# ============================================
 node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+package-lock.json
+yarn.lock
 
+# ============================================
 # Docker (if used)
+# ============================================
 docker-compose.override.yml
 .dockerignore.local
+.docker/
 
+# ============================================
 # Additional backup files
+# ============================================
 .env_old
 *.old
+*.backup
+*.bak
+*_backup
+*_old
+
+# ============================================
+# Project-specific temporary files
+# ============================================
+# Copy files (e.g., example_usage copy.py)
+* copy.*
+* copy
+*_copy.*
+
+# Session state files
+*.session
+*.state
+session_*.json
+state_*.json
+
+# Temporary research data
+temp_research_*.json
+temp_*.json
+*.temp.json
+
+# Generated titles cache
+title_cache.json
+*.title_cache
+
+# ============================================
+# Keep important directories (optional)
+# ============================================
+# Uncomment if you want to keep empty directories
+# !output/.gitkeep
+# !checkpoints/.gitkeep

@@ -10,11 +10,51 @@ import time
 import json
 import requests
 import uuid
+import base64
 from pathlib import Path
 from typing import Optional, Dict, List
 from datetime import datetime
 from dotenv import load_dotenv
 import streamlit as st
+from io import BytesIO
+import re
+
+# Webスクレイピング用のインポート
+try:
+    from bs4 import BeautifulSoup
+    SCRAPING_AVAILABLE = True
+except ImportError:
+    SCRAPING_AVAILABLE = False
+
+# 記事抽出用のインポート
+try:
+    import trafilatura
+    TRAFILATURA_AVAILABLE = True
+except ImportError:
+    TRAFILATURA_AVAILABLE = False
+
+# PDFテキスト抽出用のインポート
+try:
+    import PyPDF2
+    PDF_TEXT_EXTRACTION_AVAILABLE = True
+except ImportError:
+    PDF_TEXT_EXTRACTION_AVAILABLE = False
+
+# PDF生成用のインポート
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import mm
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
+    from reportlab.lib.enums import TA_LEFT, TA_JUSTIFY
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    if 'st' in globals():
+        st.warning("PDF生成機能を使用するにはreportlabをインストールしてください: pip install reportlab")
 
 # プロジェクトルートをパスに追加（インポートの前に実行）
 project_root = Path(__file__).parent.parent
@@ -94,7 +134,23 @@ st.markdown("""
         padding: 1rem;
     }
     .main .block-container {
+        max-width: 1350px;
+        padding: 2rem 1rem;
+    }
+    /* 結果表示部分を中央揃えで適切な幅に制限（1.5倍に拡大） */
+    .stMarkdown {
         max-width: 1200px;
+        margin: 0 auto;
+    }
+    /* レポート表示部分の幅を制限（1.5倍に拡大） */
+    div[data-testid="stVerticalBlock"] {
+        max-width: 1200px;
+        margin: 0 auto;
+    }
+    /* メトリクス表示の幅を制限（1.5倍に拡大） */
+    div[data-testid="stMetricContainer"] {
+        max-width: 1200px;
+        margin: 0 auto;
     }
     .sidebar .sidebar-content {
         background-color: #f0f2f6;
@@ -444,6 +500,8 @@ def display_research_result(result: dict, research_id: str = None):
     if not result:
         return
     
+    # 結果表示を中央揃えで適切な幅に制限するためのコンテナ
+    # コンテナを使用せず、直接表示（チェックボックス変更時の表示問題を回避）
     st.markdown("### 📊 リサーチ結果")
     
     # 統計情報
@@ -472,12 +530,50 @@ def display_research_result(result: dict, research_id: str = None):
                     st.session_state.regenerate_research_id = research_id
                     st.rerun()
         
+        # レポート本文を処理（Footnotesを参照ソースへのリンクに変換）
+        report_draft = result["report"]["draft"]
+        
+        # Footnotesセクション（## 参考文献）を削除
+        # Footnotesセクションは「## 参考文献」から始まり、次のセクション（---）まで
+        import re
+        # Footnotesセクションを削除
+        report_draft = re.sub(r'## 参考文献.*?(?=\n---|\n## |\Z)', '', report_draft, flags=re.DOTALL)
+        
+        # Footnotes形式（[^1], [^2]など）を参照ソースへのリンクに変換
+        if result["report"].get("sources"):
+            sources = result["report"]["sources"]
+            # 各Footnotesを参照ソースへのリンクに変換
+            for i, source in enumerate(sources, 1):
+                url = source.get('url', 'N/A')
+                # [^数字]形式を[数字](URL)形式に変換
+                footnote_pattern = rf'\[\^{i}\]'
+                link_replacement = f'[{i}]({url})'
+                report_draft = re.sub(footnote_pattern, link_replacement, report_draft)
+        
         # Markdownレンダリング（コードブロックのハイライトを含む）
         # Streamlitは自動的にコードブロックをハイライトします
-        st.markdown(result["report"]["draft"], unsafe_allow_html=False)
+        st.markdown(report_draft, unsafe_allow_html=False)
         
         # ダウンロードボタン
-        draft_content = result["report"]["draft"]
+        draft_content = report_draft
+        
+        # 参照ソース情報を追加（Footnotesセクションは表示しない）
+        if result["report"].get("sources"):
+            draft_content += "\n\n---\n\n## 📚 参照ソース\n\n"
+            draft_content += f"本レポートの作成にあたり、以下の {len(result['report']['sources'])} 件のソースを参照しました。\n\n"
+            
+            for i, source in enumerate(result["report"]["sources"], 1):
+                draft_content += f"### {i}. {source.get('title', 'N/A')}\n\n"
+                draft_content += f"- **URL**: [{source.get('url', 'N/A')}]({source.get('url', 'N/A')})\n"
+                if source.get("summary"):
+                    # 要約は全文を表示
+                    draft_content += f"- **要約**: {source['summary']}\n"
+                if source.get("relevance_score") is not None:
+                    draft_content += f"- **関連性スコア**: {source['relevance_score']:.2f}\n"
+                if source.get("source"):
+                    draft_content += f"- **ソース**: {source['source']}\n"
+                draft_content += "\n"
+        
         st.download_button(
             label="📥 レポートをダウンロード",
             data=draft_content,
@@ -487,14 +583,212 @@ def display_research_result(result: dict, research_id: str = None):
         
         # 参照ソース
         if result["report"].get("sources"):
-            with st.expander(f"📚 参照ソース ({len(result['report']['sources'])}件)"):
-                for i, source in enumerate(result["report"]["sources"], 1):
-                    st.markdown(f"**{i}. {source.get('title', 'N/A')}**")
-                    st.markdown(f"- URL: {source.get('url', 'N/A')}")
-                    if source.get("summary"):
-                        st.caption(source["summary"][:200] + "..." if len(source["summary"]) > 200 else source["summary"])
-                    if source.get("relevance_score"):
-                        st.caption(f"関連性スコア: {source['relevance_score']:.2f}")
+            sources = result["report"]["sources"]
+            sources_key = f"sources_selection_{research_id if research_id else 'default'}"
+            expander_state_key = f"expander_open_{sources_key}"
+            
+            # expanderの開閉状態を明示的に管理（デフォルトで開く）
+            if expander_state_key not in st.session_state:
+                st.session_state[expander_state_key] = True
+            
+            with st.expander(f"📚 参照ソース ({len(sources)}件)", expanded=st.session_state[expander_state_key]):
+                    # 選択状態の初期化
+                    if sources_key not in st.session_state:
+                        st.session_state[sources_key] = []
+                    
+                    # 全選択/全解除ボタン
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("✅ すべて選択", key=f"select_all_{sources_key}"):
+                            st.session_state[sources_key] = list(range(len(sources)))
+                            # チェックボックスのkeyで管理されている状態も同期（ウィジェット作成前に設定）
+                            for i in range(len(sources)):
+                                checkbox_key = f"source_check_{sources_key}_{i}"
+                                st.session_state[checkbox_key] = True
+                            st.rerun()
+                    with col2:
+                        if st.button("❌ すべて解除", key=f"deselect_all_{sources_key}"):
+                            st.session_state[sources_key] = []
+                            # チェックボックスのkeyで管理されている状態も同期（ウィジェット作成前に設定）
+                            for i in range(len(sources)):
+                                checkbox_key = f"source_check_{sources_key}_{i}"
+                                st.session_state[checkbox_key] = False
+                            st.rerun()
+                    
+                    # 選択されたソース数を表示
+                    selected_count = len(st.session_state[sources_key])
+                    if selected_count > 0:
+                        st.info(f"📌 {selected_count}件のソースが選択されています")
+                    
+                    # 各ソースにチェックボックスを追加
+                    # チェックボックスの状態変更を効率的に処理（高速化）
+                    for i, source in enumerate(sources):
+                        col_check, col_content = st.columns([1, 20])
+                        with col_check:
+                            # チェックボックスのキー（Streamlitの状態管理に使用）
+                            checkbox_key = f"source_check_{sources_key}_{i}"
+                            
+                            # チェックボックスの現在の状態を取得（sources_keyリストから判断）
+                            is_selected = i in st.session_state[sources_key]
+                            
+                            # チェックボックスの初期状態を設定（初回のみ、ウィジェット作成前に設定）
+                            # 注意: ウィジェット作成後にst.session_stateで値を設定すると警告が表示される
+                            if checkbox_key not in st.session_state:
+                                st.session_state[checkbox_key] = is_selected
+                            
+                            # チェックボックスを表示
+                            # valueパラメータを使用する場合は、st.session_stateで値を変更しない
+                            new_selected = st.checkbox(
+                                "",
+                                value=is_selected,  # sources_keyリストから直接判断した値を使用
+                                key=checkbox_key,
+                                label_visibility="collapsed"
+                            )
+                            
+                            # 状態が変更された場合のみsession_stateを更新
+                            if new_selected != is_selected:
+                                # sources_keyリストを更新
+                                if new_selected:
+                                    # 追加（重複チェックを避ける）
+                                    if i not in st.session_state[sources_key]:
+                                        st.session_state[sources_key].append(i)
+                                else:
+                                    # 削除（効率的に）
+                                    try:
+                                        st.session_state[sources_key].remove(i)
+                                    except ValueError:
+                                        pass  # 既に削除されている場合は何もしない
+                                # expanderの開閉状態を保持（開いたままにする）
+                                st.session_state[expander_state_key] = True
+                                st.rerun()
+                        
+                        with col_content:
+                            st.markdown(f"**{i+1}. {source.get('title', 'N/A')}**")
+                            url = source.get('url', 'N/A')
+                            st.markdown(f"- URL: {url}")
+                            
+                            if source.get("summary"):
+                                st.caption(source["summary"][:200] + "..." if len(source["summary"]) > 200 else source["summary"])
+                            if source.get("relevance_score"):
+                                st.caption(f"関連性スコア: {source['relevance_score']:.2f}")
+                            
+                            # PDFファイルの場合は関連性スコアの後にダウンロードボタンを表示
+                            is_pdf_url = url.lower().endswith('.pdf') or '.pdf' in url.lower() if url != 'N/A' else False
+                            if is_pdf_url and url != 'N/A':
+                                pdf_download_key = f"pdf_download_{sources_key}_{i}"
+                                if pdf_download_key not in st.session_state:
+                                    st.session_state[pdf_download_key] = None
+                                
+                                if st.button(f"📥 PDFをダウンロード", key=f"fetch_pdf_{sources_key}_{i}", use_container_width=False):
+                                    try:
+                                        with st.spinner("PDFファイルを取得中..."):
+                                            headers = {
+                                                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                                                "Accept": "application/pdf,application/octet-stream,*/*",
+                                            }
+                                            response = requests.get(url, timeout=30, headers=headers, allow_redirects=True)
+                                            response.raise_for_status()
+                                            st.session_state[pdf_download_key] = response.content
+                                            st.success("PDFファイルを取得しました。")
+                                            st.rerun()
+                                    except Exception as e:
+                                        st.error(f"PDFファイルの取得に失敗しました: {e}")
+                                
+                                # PDFファイルが取得済みの場合はダウンロードボタンを表示
+                                if st.session_state[pdf_download_key] is not None:
+                                    pdf_filename = url.split('/')[-1].split('?')[0] or f"source_{i+1}.pdf"
+                                    st.download_button(
+                                        label=f"📥 {pdf_filename}をダウンロード",
+                                        data=st.session_state[pdf_download_key],
+                                        file_name=pdf_filename,
+                                        mime="application/pdf",
+                                        key=f"download_pdf_file_{sources_key}_{i}",
+                                        use_container_width=False
+                                    )
+                    
+                    # PDFダウンロードボタン
+                    st.divider()
+                    selected_count = len(st.session_state[sources_key])
+                    if selected_count > 0:
+                        if PDF_AVAILABLE:
+                            # PDF生成とダウンロード
+                            pdf_key = f"pdf_buffer_{sources_key}"
+                            pdf_filename_key = f"pdf_filename_{sources_key}"
+                            
+                            # PDF生成ボタン（各ソースごとに個別のPDFを生成）
+                            if st.button(
+                                f"📥 選択した{selected_count}件のソースページをPDFで生成",
+                                key=f"generate_pdf_{sources_key}",
+                                use_container_width=True
+                            ):
+                                try:
+                                    with st.spinner(f"📄 PDFを生成中... 各URL先のページを取得しています (0/{selected_count})"):
+                                        # 各ソースごとに個別のPDFを生成
+                                        pdf_buffers_key = f"pdf_buffers_{sources_key}"
+                                        pdf_filenames_key = f"pdf_filenames_{sources_key}"
+                                        
+                                        pdf_buffers = {}
+                                        pdf_filenames = {}
+                                        
+                                        selected_indices = st.session_state[sources_key]
+                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        
+                                        for idx, source_idx in enumerate(selected_indices, 1):
+                                            if source_idx < 0 or source_idx >= len(sources):
+                                                continue
+                                            
+                                            source = sources[source_idx]
+                                            source_title = source.get('title', 'source')
+                                            source_safe = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in source_title[:50])
+                                            
+                                            # 単一ソース用のPDFを生成
+                                            pdf_buffer = generate_single_source_pdf(
+                                                source,
+                                                source_idx,
+                                                result.get("theme", "リサーチ")
+                                            )
+                                            
+                                            filename = f"{source_safe}_{timestamp}.pdf"
+                                            pdf_buffers[source_idx] = pdf_buffer.getvalue()
+                                            pdf_filenames[source_idx] = filename
+                                        
+                                        # セッションステートに保存
+                                        st.session_state[pdf_buffers_key] = pdf_buffers
+                                        st.session_state[pdf_filenames_key] = pdf_filenames
+                                        
+                                        st.success(f"✅ {len(pdf_buffers)}件のPDFの生成が完了しました。")
+                                except Exception as e:
+                                    st.error(f"PDF生成エラー: {e}")
+                                    logger.error(f"PDF生成エラー: {e}", exc_info=True)
+                            
+                            # 生成されたPDFのダウンロードボタンを表示
+                            pdf_buffers_key = f"pdf_buffers_{sources_key}"
+                            pdf_filenames_key = f"pdf_filenames_{sources_key}"
+                            
+                            if pdf_buffers_key in st.session_state and pdf_filenames_key in st.session_state:
+                                pdf_buffers = st.session_state[pdf_buffers_key]
+                                pdf_filenames = st.session_state[pdf_filenames_key]
+                                
+                                if pdf_buffers and pdf_filenames:
+                                    st.markdown("### 📥 生成されたPDFをダウンロード")
+                                    for source_idx in st.session_state[sources_key]:
+                                        if source_idx in pdf_buffers and source_idx in pdf_filenames:
+                                            source = sources[source_idx]
+                                            source_title = source.get('title', 'N/A')
+                                            filename = pdf_filenames[source_idx]
+                                            
+                                            st.download_button(
+                                                label=f"📥 {source_title} をダウンロード",
+                                                data=pdf_buffers[source_idx],
+                                                file_name=filename,
+                                                mime="application/pdf",
+                                                key=f"download_pdf_{sources_key}_{source_idx}",
+                                                use_container_width=False
+                                            )
+                        else:
+                            st.warning("PDF生成機能を使用するにはreportlabをインストールしてください: pip install reportlab")
+                    else:
+                        st.info("📌 PDFをダウンロードするには、上記のソースを選択してください。")
 
 
 def display_progress(status_data: dict):
@@ -701,11 +995,11 @@ python -m uvicorn src.api.main:app --reload
                         st.session_state.regenerate_prompt = user_prompt
                         st.rerun()
     
-    # 現在のリサーチの進捗を表示
+    # 現在のリサーチの進捗を表示（進捗表示は非表示、結果表示は表示）
     if st.session_state.current_research_id:
         status_data = get_research_status(st.session_state.current_research_id)
         if status_data:
-            display_progress(status_data)
+            # display_progress(status_data)  # 進捗表示は非表示
             
             # 完了した場合は結果を表示
             if status_data.get("status") == "completed":
@@ -860,9 +1154,9 @@ def monitor_research_progress(research_id: str):
                         st.session_state.stop_requested = True
                         break
         
-        # 進捗を表示
-        with progress_placeholder.container():
-            display_progress(status_data)
+        # 進捗を表示（非表示）
+        # with progress_placeholder.container():
+        #     display_progress(status_data)
         
         # プログレスバーを更新
         if status_data.get("progress"):
@@ -912,7 +1206,7 @@ def monitor_research_progress(research_id: str):
                 result = get_research_result(research_id)
                 if result:
                     st.success("✅ リサーチが完了しました！")
-                    display_research_result(result)
+                    display_research_result(result)  # 調査結果を表示
                     
                     # レポートをMarkdownファイルに保存
                     save_report_to_file(result, research_id)
@@ -1015,6 +1309,604 @@ def monitor_research_progress(research_id: str):
     st.session_state.stop_requested = False
 
 
+def _register_japanese_font():
+    """日本語フォントを登録"""
+    # UnicodeCIDFontを使用（日本語対応の組み込みフォント）
+    try:
+        # HeiseiKakuGo-W5（平成角ゴシック）を試す
+        pdfmetrics.registerFont(UnicodeCIDFont('HeiseiKakuGo-W5'))
+        return 'HeiseiKakuGo-W5'
+    except Exception as e1:
+        try:
+            # HeiseiMin-W3（平成明朝）を試す
+            pdfmetrics.registerFont(UnicodeCIDFont('HeiseiMin-W3'))
+            return 'HeiseiMin-W3'
+        except Exception as e2:
+            # WindowsのTTFフォントを試す
+            font_paths = [
+                'C:/Windows/Fonts/msgothic.ttf',
+                'C:/Windows/Fonts/meiryo.ttf',
+                'C:/Windows/Fonts/msmincho.ttf',
+            ]
+            for font_path in font_paths:
+                if os.path.exists(font_path):
+                    try:
+                        pdfmetrics.registerFont(TTFont('JapaneseFont', font_path))
+                        return 'JapaneseFont'
+                    except Exception:
+                        continue
+            
+            # 最後の手段として、UnicodeCIDFontのデフォルトを試す
+            try:
+                pdfmetrics.registerFont(UnicodeCIDFont('HeiseiKakuGo-W5'))
+                return 'HeiseiKakuGo-W5'
+            except:
+                # フォントが見つからない場合は警告を出してHelveticaを使用
+                import logging
+                logging.warning("日本語フォントの登録に失敗しました。日本語が正しく表示されない可能性があります。")
+                return 'Helvetica'
+
+
+def _fetch_url_content(url: str) -> str:
+    """URL先のページコンテンツを取得（HTMLの場合はtrafilaturaで記事を抽出）"""
+    if not SCRAPING_AVAILABLE and not TRAFILATURA_AVAILABLE:
+        return "スクレイピング機能が利用できません（BeautifulSoupまたはtrafilaturaが必要です）"
+    
+    # URLがPDFファイルかどうかをチェック
+    is_pdf = url.lower().endswith('.pdf') or '.pdf' in url.lower()
+    
+    try:
+        # より一般的なブラウザのUser-Agentを使用（403エラーを回避）
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Cache-Control": "max-age=0"
+        }
+        
+        # PDFファイルの場合はAcceptヘッダーを変更
+        if is_pdf:
+            headers["Accept"] = "application/pdf,application/octet-stream,*/*"
+        
+        response = requests.get(url, timeout=30, headers=headers, allow_redirects=True)
+        response.raise_for_status()
+        
+        # Content-Typeをチェック
+        content_type = response.headers.get('Content-Type', '').lower()
+        
+        # PDFファイルの場合
+        if is_pdf or 'application/pdf' in content_type:
+            if PDF_TEXT_EXTRACTION_AVAILABLE:
+                try:
+                    # PyPDF2でPDFからテキストを抽出
+                    pdf_reader = PyPDF2.PdfReader(BytesIO(response.content))
+                    text_content = ""
+                    max_pages = min(len(pdf_reader.pages), 10)  # 最大10ページまで
+                    for i in range(max_pages):
+                        page = pdf_reader.pages[i]
+                        page_text = page.extract_text()
+                        if page_text:
+                            text_content += f"--- ページ {i+1} ---\n\n{page_text}\n\n"
+                    
+                    if text_content.strip():
+                        return text_content.strip()
+                    else:
+                        return f"PDFファイルを取得しましたが、テキスト抽出に失敗しました。\nURL: {url}\n\n（このPDFは画像ベースのPDFの可能性があります。OCR処理が必要な場合があります）"
+                except Exception as e:
+                    return f"PDFファイルのテキスト抽出に失敗しました: {str(e)}\nURL: {url}"
+            else:
+                return f"PDFファイルを取得しましたが、テキスト抽出にはPyPDF2が必要です。\nURL: {url}\n\nインストール方法: pip install PyPDF2\n\n（PDFファイルの内容をPDFに含めるには、PyPDF2をインストールしてください）"
+        
+        # HTMLページの場合 - trafilaturaを使用して記事を抽出
+        if TRAFILATURA_AVAILABLE:
+            try:
+                # 文字エンコーディングを検出
+                if response.encoding is None or response.encoding == 'ISO-8859-1':
+                    response.encoding = response.apparent_encoding or 'utf-8'
+                
+                # trafilaturaで記事コンテンツを抽出
+                extracted_text = trafilatura.extract(
+                    response.text,
+                    url=url,
+                    include_comments=False,
+                    include_tables=True,
+                    include_images=False,
+                    include_links=False,
+                    output_format='plaintext'
+                )
+                
+                if extracted_text and extracted_text.strip():
+                    # テキストクリーンアップ
+                    content = re.sub(r'\s+', ' ', extracted_text)
+                    content = re.sub(r'\n\s*\n', '\n\n', content)
+                    return content.strip()
+            except Exception as e:
+                # trafilaturaで抽出に失敗した場合は、BeautifulSoupにフォールバック
+                import logging
+                logging.warning(f"trafilaturaでの抽出に失敗しました: {e}。BeautifulSoupにフォールバックします。")
+        
+        # trafilaturaが利用できない場合、または抽出に失敗した場合はBeautifulSoupを使用
+        if SCRAPING_AVAILABLE:
+            # 文字エンコーディングを検出
+            if response.encoding is None or response.encoding == 'ISO-8859-1':
+                response.encoding = response.apparent_encoding or 'utf-8'
+            
+            soup = BeautifulSoup(response.content, "html.parser", from_encoding=response.encoding)
+            
+            # スクリプトとスタイルを除去
+            for script in soup(["script", "style", "nav", "header", "footer", "aside"]):
+                script.decompose()
+            
+            # メインコンテンツを抽出
+            main = soup.find("main")
+            if main:
+                content = main.get_text(separator="\n", strip=True)
+            else:
+                article = soup.find("article")
+                if article:
+                    content = article.get_text(separator="\n", strip=True)
+                else:
+                    body = soup.find("body")
+                    if body:
+                        content = body.get_text(separator="\n", strip=True)
+                    else:
+                        content = soup.get_text(separator="\n", strip=True)
+            
+            # テキストクリーンアップ
+            content = re.sub(r'\s+', ' ', content)
+            content = re.sub(r'\n\s*\n', '\n\n', content)
+            
+            if not content.strip():
+                return f"ページを取得しましたが、コンテンツが見つかりませんでした。\nURL: {url}"
+            
+            return content.strip()
+        else:
+            return f"スクレイピング機能が利用できません（BeautifulSoupが必要です）。\nURL: {url}"
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 403:
+            return f"ページへのアクセスが拒否されました（403 Forbidden）。\nURL: {url}\n\nこのページはアクセス制限されている可能性があります。ブラウザで直接アクセスして確認してください。"
+        elif e.response.status_code == 404:
+            return f"ページが見つかりませんでした（404 Not Found）。\nURL: {url}"
+        else:
+            return f"HTTPエラー ({e.response.status_code}): {str(e)}\nURL: {url}"
+    except requests.exceptions.Timeout:
+        return f"リクエストがタイムアウトしました（30秒）。\nURL: {url}"
+    except requests.exceptions.RequestException as e:
+        return f"ページの取得に失敗しました: {str(e)}\nURL: {url}"
+    except Exception as e:
+        return f"エラーが発生しました: {str(e)}\nURL: {url}"
+
+
+def _download_pdf_file(url: str) -> Optional[bytes]:
+    """PDFファイルをダウンロード"""
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/pdf,application/octet-stream,*/*",
+        }
+        response = requests.get(url, timeout=30, headers=headers, allow_redirects=True)
+        response.raise_for_status()
+        
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+            return response.content
+        return None
+    except Exception as e:
+        import logging
+        logging.warning(f"PDFファイルのダウンロードに失敗: {url}, エラー: {e}")
+        return None
+
+
+def generate_sources_pdf(sources: List[Dict], selected_indices: List[int], theme: str = "参照ソース", progress_callback=None) -> BytesIO:
+    """選択された参照ソースのURL先ページをPDF形式で生成（PDFファイルの場合はそのまま埋め込む）"""
+    if not PDF_AVAILABLE:
+        raise ImportError("reportlabがインストールされていません")
+    
+    # まず、PDFファイルのURLを検出
+    pdf_files = []
+    html_sources = []
+    
+    for source_idx in selected_indices:
+        if source_idx < 0 or source_idx >= len(sources):
+            continue
+        source = sources[source_idx]
+        url = source.get('url', '')
+        if url and (url.lower().endswith('.pdf') or '.pdf' in url.lower()):
+            pdf_content = _download_pdf_file(url)
+            if pdf_content:
+                pdf_files.append((source_idx, pdf_content, source))
+            else:
+                html_sources.append((source_idx, source))
+        else:
+            html_sources.append((source_idx, source))
+    
+    # PDFファイルのみが選択されている場合、それらを結合
+    if pdf_files and len(pdf_files) == len(selected_indices) and PDF_TEXT_EXTRACTION_AVAILABLE:
+        try:
+            from PyPDF2 import PdfMerger
+            pdf_merger = PdfMerger()
+            
+            for source_idx, pdf_content, source in pdf_files:
+                pdf_merger.append(BytesIO(pdf_content))
+            
+            # 結合されたPDFを返す
+            merged_buffer = BytesIO()
+            pdf_merger.write(merged_buffer)
+            pdf_merger.close()
+            merged_buffer.seek(0)
+            return merged_buffer
+        except Exception as e:
+            import logging
+            logging.warning(f"PDF結合エラー: {e}。テキスト形式で生成します。")
+    
+    # テキスト形式でPDFを生成（HTMLページまたはPDFファイルとHTMLページの混合）
+    # 日本語フォントを登録
+    japanese_font = _register_japanese_font()
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # カスタムスタイル（日本語フォントを使用）
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontName=japanese_font,
+        fontSize=18,
+        textColor=(0, 0, 0),
+        spaceAfter=30,
+        alignment=TA_LEFT
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontName=japanese_font,
+        fontSize=14,
+        textColor=(0, 0, 0),
+        spaceAfter=12,
+        spaceBefore=12,
+        alignment=TA_LEFT
+    )
+    
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=10,
+        textColor=(0, 0, 0),
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        leading=14
+    )
+    
+    url_style = ParagraphStyle(
+        'CustomURL',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=9,
+        textColor=(0, 0, 0.8),
+        spaceAfter=6,
+        alignment=TA_LEFT
+    )
+    
+    content_style = ParagraphStyle(
+        'CustomContent',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=9,
+        textColor=(0, 0, 0),
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        leading=12
+    )
+    
+    # タイトル
+    story.append(Paragraph(f"<b>{theme} - 参照ソースページ内容</b>", title_style))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"作成日時: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}", normal_style))
+    story.append(Paragraph(f"選択されたソース数: {len(selected_indices)}件", normal_style))
+    story.append(Spacer(1, 20))
+    
+    # 選択されたソースのURL先ページを取得して追加
+    total = len(selected_indices)
+    pdf_files_to_merge = []  # 結合するPDFファイル
+    
+    for idx, source_idx in enumerate(selected_indices, 1):
+        if source_idx < 0 or source_idx >= len(sources):
+            continue
+        
+        source = sources[source_idx]
+        title = source.get('title', 'N/A')
+        url = source.get('url', 'N/A')
+        summary = source.get('summary', '')
+        relevance_score = source.get('relevance_score')
+        source_type = source.get('source', '')
+        
+        # 進捗コールバック
+        if progress_callback:
+            progress_callback(idx, total, title)
+        
+        # PDFファイルのURLかどうかをチェック
+        is_pdf_url = url != 'N/A' and (url.lower().endswith('.pdf') or '.pdf' in url.lower())
+        
+        if is_pdf_url:
+            # PDFファイルの場合は、そのままダウンロードして結合用に保存
+            pdf_content = _download_pdf_file(url)
+            if pdf_content:
+                pdf_files_to_merge.append((source_idx, pdf_content, source))
+                # PDFファイルの情報をテキストPDFに追加（結合できない場合のため）
+                story.append(Paragraph(f"<b>{idx}. {title}</b>", heading_style))
+                story.append(Paragraph(f"<b>URL:</b> {url}", url_style))
+                if PDF_TEXT_EXTRACTION_AVAILABLE:
+                    try:
+                        from PyPDF2 import PdfReader
+                        pdf_reader = PdfReader(BytesIO(pdf_content))
+                        story.append(Paragraph(f"<b>PDFファイル:</b> {len(pdf_reader.pages)}ページ", normal_style))
+                    except:
+                        story.append(Paragraph("<b>PDFファイル:</b> 取得済み", normal_style))
+                story.append(Paragraph("（このPDFファイルは結合されたPDFに含まれます）", normal_style))
+                story.append(Spacer(1, 12))
+                continue
+        
+        # HTMLページの場合
+        # ソース番号とタイトル
+        story.append(Paragraph(f"<b>{idx}. {title}</b>", heading_style))
+        
+        # URL
+        if url != 'N/A':
+            story.append(Paragraph(f"<b>URL:</b> {url}", url_style))
+            
+            # URL先のページコンテンツを取得
+            story.append(Spacer(1, 6))
+            story.append(Paragraph("<b>ページ内容:</b>", normal_style))
+            
+            page_content = _fetch_url_content(url)
+            if page_content:
+                # 長いコンテンツを適切に分割（PDFの制限を考慮）
+                # HTMLエスケープ処理
+                page_content_escaped = page_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                # 長すぎる場合は切り詰め（10000文字程度）
+                if len(page_content_escaped) > 10000:
+                    page_content_escaped = page_content_escaped[:10000] + "\n\n... (内容が長いため一部を省略しています)"
+                
+                # 段落ごとに分割して追加（長いテキストを適切に処理）
+                paragraphs = page_content_escaped.split('\n\n')
+                for para in paragraphs[:50]:  # 最大50段落まで
+                    if para.strip():
+                        story.append(Paragraph(para.strip(), content_style))
+                        story.append(Spacer(1, 3))
+            else:
+                story.append(Paragraph("ページ内容の取得に失敗しました", content_style))
+        
+        # 要約（元の要約も表示）
+        if summary:
+            story.append(Spacer(1, 6))
+            summary_escaped = summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            story.append(Paragraph(f"<b>要約:</b> {summary_escaped}", normal_style))
+        
+        # 関連性スコア
+        if relevance_score is not None:
+            story.append(Paragraph(f"<b>関連性スコア:</b> {relevance_score:.2f}", normal_style))
+        
+        # ソースタイプ
+        if source_type:
+            story.append(Paragraph(f"<b>ソース:</b> {source_type}", normal_style))
+        
+        # ページ区切り（最後の項目以外）
+        if idx < len(selected_indices):
+            story.append(PageBreak())
+    
+    # PDFファイルがある場合、テキストPDFの後に結合
+    if pdf_files_to_merge and PDF_TEXT_EXTRACTION_AVAILABLE:
+        try:
+            from PyPDF2 import PdfMerger
+            # まずテキストPDFを生成
+            doc.build(story)
+            buffer.seek(0)
+            
+            # PDFファイルを結合
+            pdf_merger = PdfMerger()
+            pdf_merger.append(buffer)  # テキストPDFを追加
+            
+            for source_idx, pdf_content, source in pdf_files_to_merge:
+                pdf_merger.append(BytesIO(pdf_content))
+            
+            # 結合されたPDFを返す
+            merged_buffer = BytesIO()
+            pdf_merger.write(merged_buffer)
+            pdf_merger.close()
+            merged_buffer.seek(0)
+            return merged_buffer
+        except Exception as e:
+            import logging
+            logging.warning(f"PDF結合エラー: {e}。テキストPDFのみを返します。")
+            buffer.seek(0)
+            return buffer
+        
+        # 要約（元の要約も表示）
+        if summary:
+            story.append(Spacer(1, 6))
+            summary_escaped = summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            story.append(Paragraph(f"<b>要約:</b> {summary_escaped}", normal_style))
+        
+        # 関連性スコア
+        if relevance_score is not None:
+            story.append(Paragraph(f"<b>関連性スコア:</b> {relevance_score:.2f}", normal_style))
+        
+        # ソースタイプ
+        if source_type:
+            story.append(Paragraph(f"<b>ソース:</b> {source_type}", normal_style))
+        
+        # ページ区切り（最後の項目以外）
+        if idx < len(selected_indices):
+            story.append(PageBreak())
+    
+    # PDFを生成
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
+def generate_single_source_pdf(source: Dict, source_idx: int, theme: str = "参照ソース") -> BytesIO:
+    """単一の参照ソースのURL先ページをPDF形式で生成（PDFファイルの場合はそのまま埋め込む）"""
+    if not PDF_AVAILABLE:
+        raise ImportError("reportlabがインストールされていません")
+    
+    title = source.get('title', 'N/A')
+    url = source.get('url', 'N/A')
+    summary = source.get('summary', '')
+    relevance_score = source.get('relevance_score')
+    source_type = source.get('source', '')
+    
+    # PDFファイルのURLかどうかをチェック
+    is_pdf_url = url != 'N/A' and (url.lower().endswith('.pdf') or '.pdf' in url.lower())
+    
+    # PDFファイルの場合は、そのままダウンロードして返す
+    if is_pdf_url and PDF_TEXT_EXTRACTION_AVAILABLE:
+        pdf_content = _download_pdf_file(url)
+        if pdf_content:
+            return BytesIO(pdf_content)
+    
+    # HTMLページまたはPDFファイルの取得に失敗した場合、テキスト形式でPDFを生成
+    # 日本語フォントを登録
+    japanese_font = _register_japanese_font()
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # カスタムスタイル（日本語フォントを使用）
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontName=japanese_font,
+        fontSize=18,
+        textColor=(0, 0, 0),
+        spaceAfter=30,
+        alignment=TA_LEFT
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontName=japanese_font,
+        fontSize=14,
+        textColor=(0, 0, 0),
+        spaceAfter=12,
+        spaceBefore=12,
+        alignment=TA_LEFT
+    )
+    
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=10,
+        textColor=(0, 0, 0),
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        leading=14
+    )
+    
+    url_style = ParagraphStyle(
+        'CustomURL',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=9,
+        textColor=(0, 0, 0.8),
+        spaceAfter=6,
+        alignment=TA_LEFT
+    )
+    
+    content_style = ParagraphStyle(
+        'CustomContent',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=9,
+        textColor=(0, 0, 0),
+        spaceAfter=6,
+        alignment=TA_JUSTIFY,
+        leading=12
+    )
+    
+    # タイトル
+    story.append(Paragraph(f"<b>{theme} - 参照ソースページ内容</b>", title_style))
+    story.append(Spacer(1, 12))
+    story.append(Paragraph(f"作成日時: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}", normal_style))
+    story.append(Spacer(1, 20))
+    
+    # ソース情報
+    story.append(Paragraph(f"<b>{title}</b>", heading_style))
+    
+    # URL
+    if url != 'N/A':
+        story.append(Paragraph(f"<b>URL:</b> {url}", url_style))
+        
+        # PDFファイルの場合は情報のみ表示
+        if is_pdf_url:
+            pdf_content = _download_pdf_file(url)
+            if pdf_content and PDF_TEXT_EXTRACTION_AVAILABLE:
+                try:
+                    from PyPDF2 import PdfReader
+                    pdf_reader = PdfReader(BytesIO(pdf_content))
+                    story.append(Paragraph(f"<b>PDFファイル:</b> {len(pdf_reader.pages)}ページ", normal_style))
+                except:
+                    story.append(Paragraph("<b>PDFファイル:</b> 取得済み", normal_style))
+                story.append(Paragraph("（このPDFファイルはそのまま含まれています）", normal_style))
+    
+    # 要約（ページ内容の前に表示）
+    if summary:
+        story.append(Spacer(1, 6))
+        summary_escaped = summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        story.append(Paragraph(f"<b>要約:</b> {summary_escaped}", normal_style))
+    
+    # ページ内容（要約の後に表示）
+    if url != 'N/A' and not is_pdf_url:
+        story.append(Spacer(1, 6))
+        story.append(Paragraph("<b>ページ内容:</b>", normal_style))
+        
+        page_content = _fetch_url_content(url)
+        if page_content:
+            # 長いコンテンツを適切に分割（PDFの制限を考慮）
+            # HTMLエスケープ処理
+            page_content_escaped = page_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            # 長すぎる場合は切り詰め（10000文字程度）
+            if len(page_content_escaped) > 10000:
+                page_content_escaped = page_content_escaped[:10000] + "\n\n... (内容が長いため一部を省略しています)"
+            
+            # 段落ごとに分割して追加（長いテキストを適切に処理）
+            paragraphs = page_content_escaped.split('\n\n')
+            for para in paragraphs[:50]:  # 最大50段落まで
+                if para.strip():
+                    story.append(Paragraph(para.strip(), content_style))
+                    story.append(Spacer(1, 3))
+        else:
+            story.append(Paragraph("ページ内容の取得に失敗しました", content_style))
+    
+    # 関連性スコア
+    if relevance_score is not None:
+        story.append(Paragraph(f"<b>関連性スコア:</b> {relevance_score:.2f}", normal_style))
+    
+    # ソースタイプ
+    if source_type:
+        story.append(Paragraph(f"<b>ソース:</b> {source_type}", normal_style))
+    
+    # PDFを生成
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+
 def save_report_to_file(result: dict, research_id: str):
     """レポートをMarkdownファイルに保存"""
     if not result.get("report") or not result["report"].get("draft"):
@@ -1063,17 +1955,21 @@ def save_report_to_file(result: dict, research_id: str):
         markdown_content += "---\n\n"
         markdown_content += result["report"]["draft"]
         
-        # 参照ソースを追加
+        # 参照ソースを追加（レポート本文の最後に確実に追加）
         if result["report"].get("sources"):
-            markdown_content += "\n\n---\n\n## 参照ソース\n\n"
+            markdown_content += "\n\n---\n\n## 📚 参照ソース\n\n"
+            markdown_content += f"本レポートの作成にあたり、以下の {len(result['report']['sources'])} 件のソースを参照しました。\n\n"
+            
             for i, source in enumerate(result["report"]["sources"], 1):
-                markdown_content += f"{i}. **{source.get('title', 'N/A')}**\n"
-                markdown_content += f"   - URL: {source.get('url', 'N/A')}\n"
+                markdown_content += f"### {i}. {source.get('title', 'N/A')}\n\n"
+                markdown_content += f"- **URL**: [{source.get('url', 'N/A')}]({source.get('url', 'N/A')})\n"
                 if source.get("summary"):
-                    summary_preview = source["summary"][:200] + "..." if len(source["summary"]) > 200 else source["summary"]
-                    markdown_content += f"   - 要約: {summary_preview}\n"
-                if source.get("relevance_score"):
-                    markdown_content += f"   - 関連性スコア: {source['relevance_score']:.2f}\n"
+                    # 要約は全文を表示（200文字制限を削除）
+                    markdown_content += f"- **要約**: {source['summary']}\n"
+                if source.get("relevance_score") is not None:
+                    markdown_content += f"- **関連性スコア**: {source['relevance_score']:.2f}\n"
+                if source.get("source"):
+                    markdown_content += f"- **ソース**: {source['source']}\n"
                 markdown_content += "\n"
         
         # ファイルに書き込み
