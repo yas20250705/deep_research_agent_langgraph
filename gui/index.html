@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>リサーチエージェント - チャット</title>
+    <link rel="stylesheet" href="css/style.css">
+    <!-- Markdown parser -->
+    <script src="https://cdn.jsdelivr.net/npm/marked@11.1.1/marked.min.js"></script>
+    <!-- Syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+</head>
+<body>
+    <!-- サイドバー -->
+    <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+            <h1>🔍 リサーチエージェント</h1>
+            <button id="newChatBtn" class="btn btn-primary btn-full">➕ 新規チャット</button>
+        </div>
+
+        <div class="sidebar-section">
+            <h2>📜 履歴</h2>
+            <div id="historyList" class="history-list">
+                <!-- 履歴アイテムが動的に追加されます -->
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <h2>⚙️ 設定</h2>
+            <div class="setting-item">
+                <label for="maxIterations">最大イテレーション数</label>
+                <input type="range" id="maxIterations" min="1" max="10" value="5">
+                <span id="maxIterationsValue">5</span>
+            </div>
+            <div class="setting-item">
+                <label>
+                    <input type="checkbox" id="enableHumanIntervention">
+                    人間介入を有効化
+                </label>
+            </div>
+            <div class="setting-item">
+                <label for="apiUrl">API URL</label>
+                <input type="text" id="apiUrl" value="http://localhost:8000" placeholder="http://localhost:8000">
+            </div>
+            <button id="healthCheckBtn" class="btn btn-secondary btn-full">🏥 ヘルスチェック</button>
+        </div>
+    </aside>
+
+    <!-- メインコンテンツ -->
+    <main class="main-content">
+        <header class="main-header">
+            <h1>🔍 リサーチエージェント - チャット</h1>
+            <div id="connectionStatus" class="connection-status"></div>
+        </header>
+
+        <!-- チャットメッセージエリア -->
+        <div id="chatMessages" class="chat-messages">
+            <!-- メッセージが動的に追加されます -->
+        </div>
+
+        <!-- 入力エリア -->
+        <div class="input-area">
+            <div class="input-container">
+                <textarea 
+                    id="messageInput" 
+                    class="message-input" 
+                    placeholder="調査テーマを入力してください..."
+                    rows="1"
+                ></textarea>
+                <button id="sendBtn" class="btn btn-primary send-btn">送信</button>
+            </div>
+            <div class="input-hint">
+                <span>Shift + Enter: 改行 | Enter: 送信</span>
+            </div>
+        </div>
+    </main>
+
+    <!-- ローディングオーバーレイ -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">処理中...</div>
+    </div>
+
+    <!-- 通知エリア -->
+    <div id="notifications" class="notifications"></div>
+
+    <!-- JavaScript -->
+    <script src="js/api.js"></script>
+    <script src="js/ui.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
