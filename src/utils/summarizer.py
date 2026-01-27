@@ -106,7 +106,27 @@ URL: {url}
         })
         
         # レスポンスからテキストを抽出
-        summary = response.content if hasattr(response, 'content') else str(response)
+        response_content = response.content if hasattr(response, 'content') else str(response)
+        
+        # リスト形式のレスポンスを処理（Gemini対応）
+        if isinstance(response_content, list):
+            extracted_texts = []
+            for item in response_content:
+                if isinstance(item, dict) and 'text' in item:
+                    extracted_texts.append(item['text'])
+                elif item:
+                    extracted_texts.append(str(item))
+            summary = "".join(extracted_texts)
+        # 辞書形式の場合は'text'キーから取得
+        elif isinstance(response_content, dict):
+            if 'text' in response_content:
+                summary = response_content['text']
+            elif 'content' in response_content:
+                summary = response_content['content']
+            else:
+                summary = str(response_content)
+        else:
+            summary = str(response_content) if response_content else ""
         
         # 文字数制限を適用（念のため）
         if len(summary) > max_length:
