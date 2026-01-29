@@ -5,7 +5,7 @@ REST APIエンドポイントを実装
 """
 
 from fastapi import FastAPI, HTTPException, status, Depends, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 from src.api.schemas import (
@@ -30,6 +30,7 @@ from src.api.middleware import (
 from src.api.streaming import stream_research_progress, create_streaming_response
 from src.utils.logger import setup_logger
 from src.utils.security import validate_theme, sanitize_error_message
+from src.utils.pdf_generator import generate_source_pdf, PDF_AVAILABLE
 from src.config.settings import Settings
 import logging
 
@@ -371,6 +372,59 @@ async def health_check():
         timestamp=datetime.now(),
         services=services
     )
+
+
+@app.post("/source/pdf")
+async def generate_source_pdf_endpoint(source: Dict):
+    """
+    参照ソースのURLからPDFを生成
+    
+    Args:
+        source: ソース情報（title, url, summary等）
+    
+    Returns:
+        PDFファイル（application/pdf）
+    """
+    if not PDF_AVAILABLE:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="PDF生成機能を使用するにはreportlabをインストールしてください"
+        )
+    
+    try:
+        url = source.get('url', '')
+        if not url:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="URLが指定されていません"
+            )
+        
+        theme = source.get('theme', '参照ソース')
+        pdf_buffer = generate_source_pdf(source, theme)
+        
+        # ファイル名を生成
+        title = source.get('title', 'source')
+        safe_title = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in title[:50])
+        filename = f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"'
+            }
+        )
+    except ImportError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"PDF生成ライブラリが利用できません: {str(e)}"
+        )
+    except Exception as e:
+        logger.error(f"PDF生成エラー: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"PDF生成に失敗しました: {str(e)}"
+        )
 
 
 @app.exception_handler(Exception)

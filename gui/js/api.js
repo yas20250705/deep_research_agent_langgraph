@@ -171,6 +171,35 @@ class API {
             return { success: false, error: error.message };
         }
     }
+
+    /**
+     * 参照ソースからPDFを生成
+     */
+    async generateSourcePdf(source, theme = '参照ソース') {
+        try {
+            const response = await fetch(`${this.baseURL}/source/pdf`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                mode: 'cors',
+                body: JSON.stringify({
+                    ...source,
+                    theme: theme
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+            }
+
+            const blob = await response.blob();
+            return { success: true, blob };
+        } catch (error) {
+            return { success: false, error: error.message };
+        }
+    }
 }
 
 // グローバルAPIインスタンス

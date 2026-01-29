@@ -18,7 +18,11 @@ class Settings(BaseSettings):
     """アプリケーション設定"""
     
     # LLMプロバイダー設定
-    LLM_PROVIDER: str = "openai"  # "openai" または "gemini"
+    LLM_PROVIDER: str = "openai"  # "openai" / "gemini" / "mock"（開発・テスト用）
+    
+    # モックLLM設定（LLM_PROVIDER=mock のときのみ使用）
+    MOCK_RESPONSE_DELAY: float = 0.1  # レスポンス遅延（秒）
+    MOCK_LOG_PROMPTS: bool = False  # プロンプトをログ出力するか
     
     # OpenAI設定
     OPENAI_API_KEY: str = ""

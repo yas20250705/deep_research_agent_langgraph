@@ -99,5 +99,12 @@ def get_llm_from_settings(settings, temperature: float = 0.3) -> BaseChatModel:
             api_key=settings.GEMINI_API_KEY
         )
     
+    elif provider == "mock":
+        from src.utils.mock_llm import MockChatModel
+        delay = getattr(settings, "MOCK_RESPONSE_DELAY", 0.1)
+        log_prompts = getattr(settings, "MOCK_LOG_PROMPTS", False)
+        logger.info("MockChatModel を使用します（APIコスト: ゼロ）")
+        return MockChatModel(response_delay=delay, log_prompts=log_prompts)
+    
     else:
-        raise ValueError(f"不明なLLMプロバイダー: {provider}")
+        raise ValueError(f"不明なLLMプロバイダー: {provider}。'openai'、'gemini'、'mock' のいずれかを指定してください。")
