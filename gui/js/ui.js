@@ -435,11 +435,13 @@ class UI {
         heading.style.marginBottom = '1rem';
         sourcesSection.appendChild(heading);
 
-        // 全選択/全解除ボタン
+        // 全選択/全解除/ダウンロードボタン（1行に配置、ダウンロードは右端）
         const buttonContainer = document.createElement('div');
         buttonContainer.style.display = 'flex';
+        buttonContainer.style.alignItems = 'center';
         buttonContainer.style.gap = '0.5rem';
         buttonContainer.style.marginBottom = '1rem';
+        buttonContainer.style.flexWrap = 'wrap';
 
         const selectAllBtn = document.createElement('button');
         selectAllBtn.className = 'btn btn-secondary';
@@ -461,11 +463,25 @@ class UI {
             });
         };
 
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'btn btn-primary';
+        downloadBtn.textContent = '📥 選択したソースをダウンロード';
+        downloadBtn.style.marginLeft = 'auto';
+        downloadBtn.onclick = () => {
+            this.downloadSelectedSources(sources, researchId);
+        };
+
         buttonContainer.appendChild(selectAllBtn);
         buttonContainer.appendChild(deselectAllBtn);
+        buttonContainer.appendChild(downloadBtn);
         sourcesSection.appendChild(buttonContainer);
 
-        // ソースリスト
+        // ソースリスト（この枠内のみスクロール）
+        const listWrapper = document.createElement('div');
+        listWrapper.style.maxHeight = '800px'; 
+        listWrapper.style.overflowY = 'auto';
+        listWrapper.style.overflowX = 'hidden';
+
         const sourcesList = document.createElement('div');
         sourcesList.className = 'sources-list';
         sourcesList.style.display = 'flex';
@@ -536,23 +552,8 @@ class UI {
             sourcesList.appendChild(sourceItem);
         });
 
-        sourcesSection.appendChild(sourcesList);
-
-        // 一括ダウンロードボタン
-        const downloadContainer = document.createElement('div');
-        downloadContainer.style.marginTop = '1.5rem';
-        downloadContainer.style.paddingTop = '1.5rem';
-        downloadContainer.style.borderTop = '1px solid var(--border-color)';
-
-        const downloadBtn = document.createElement('button');
-        downloadBtn.className = 'btn btn-primary';
-        downloadBtn.textContent = '📥 選択したソースをダウンロード';
-        downloadBtn.onclick = () => {
-            this.downloadSelectedSources(sources, researchId);
-        };
-
-        downloadContainer.appendChild(downloadBtn);
-        sourcesSection.appendChild(downloadContainer);
+        listWrapper.appendChild(sourcesList);
+        sourcesSection.appendChild(listWrapper);
 
         container.appendChild(sourcesSection);
         console.log('参照ソースセクションを追加しました。要素数:', sourcesSection.children.length);

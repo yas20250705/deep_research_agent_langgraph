@@ -402,16 +402,19 @@ async def generate_source_pdf_endpoint(source: Dict):
         theme = source.get('theme', '参照ソース')
         pdf_buffer = generate_source_pdf(source, theme)
         
-        # ファイル名を生成
+        # ファイル名を生成（HTTPヘッダーは latin-1 のため ASCII のみ使用）
         title = source.get('title', 'source')
-        safe_title = "".join(c if c.isalnum() or c in (' ', '-', '_') else '_' for c in title[:50])
-        filename = f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
+        safe_title_ascii = "".join(
+            c if ord(c) < 128 and (c.isalnum() or c in (' ', '-', '_')) else '_'
+            for c in title[:50]
+        ).strip() or "source"
+        filename_ascii = f"{safe_title_ascii}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename}"'
+                "Content-Disposition": f'attachment; filename="{filename_ascii}"'
             }
         )
     except ImportError as e:

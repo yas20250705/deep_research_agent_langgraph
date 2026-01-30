@@ -2,16 +2,24 @@
 ロギング・可観測性機能
 
 ロガーの設定とLangSmith連携
+コンソールとファイルの両方にログを出力する。
 """
 
 import logging
 import os
+from pathlib import Path
 from typing import Optional
+
+# プロジェクトルート（src/utils の2階層上）
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_DEFAULT_LOG_DIR = _PROJECT_ROOT / "logs"
+_DEFAULT_LOG_FILE = _DEFAULT_LOG_DIR / "research_agent.log"
 
 
 def setup_logger(name: str = "research_agent", level: int = logging.INFO) -> logging.Logger:
     """
-    ロガーを設定
+    ロガーを設定（コンソール＋ファイル）。
+    ルートロガーにファイルハンドラを追加するため、全モジュールのログがファイルに残る。
     
     Args:
         name: ロガー名
@@ -20,27 +28,39 @@ def setup_logger(name: str = "research_agent", level: int = logging.INFO) -> log
     Returns:
         設定済みロガー
     """
-    logger = logging.getLogger(name)
-    
-    # 既にハンドラーが設定されている場合はスキップ
-    if logger.handlers:
-        return logger
-    
-    logger.setLevel(level)
-    
-    # コンソールハンドラー
-    handler = logging.StreamHandler()
-    handler.setLevel(level)
-    
-    # フォーマッター
+    root = logging.getLogger()
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
-    handler.setFormatter(formatter)
     
-    logger.addHandler(handler)
+    # ルートロガーにファイルハンドラが既にあるか（同じパス）を判定
+    log_path = os.environ.get("LOG_FILE")
+    log_file = Path(log_path) if log_path else _DEFAULT_LOG_FILE
+    _file_handler_key = getattr(setup_logger, "_file_handler_log_path", None)
     
+    if _file_handler_key != str(log_file):
+        try:
+            log_file.parent.mkdir(parents=True, exist_ok=True)
+            file_handler = logging.FileHandler(log_file, encoding="utf-8")
+            file_handler.setLevel(level)
+            file_handler.setFormatter(formatter)
+            root.addHandler(file_handler)
+            root.setLevel(min(root.level, level))
+            setup_logger._file_handler_log_path = str(log_file)
+        except OSError as e:
+            import warnings
+            warnings.warn(f"ログファイルを開けません: {log_file}, {e}", UserWarning)
+    
+    # 名前付きロガーはルートに伝播するので、コンソールはルートに1本だけ追加
+    if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler) for h in root.handlers):
+        console = logging.StreamHandler()
+        console.setLevel(level)
+        console.setFormatter(formatter)
+        root.addHandler(console)
+    
+    logger = logging.getLogger(name)
+    logger.setLevel(level)
     return logger
 
 
