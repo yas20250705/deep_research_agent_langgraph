@@ -72,6 +72,27 @@ class API {
     }
 
     /**
+     * 永続化済みリサーチの履歴一覧を取得（サーバー再起動後の復元用）
+     */
+    async getResearchHistory() {
+        try {
+            const response = await fetch(`${this.baseURL}/research/history`, {
+                method: 'GET',
+                mode: 'cors',
+                cache: 'no-cache'
+            });
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+            }
+            const data = await response.json();
+            return { success: true, items: data.items || [] };
+        } catch (error) {
+            return { success: false, items: [], error: error.message };
+        }
+    }
+
+    /**
      * リサーチ結果を取得
      */
     async getResearch(researchId) {
@@ -211,12 +232,42 @@ class API {
                 throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
             }
 
+            const contentType = response.headers.get('Content-Type') || '';
+            if (contentType.includes('application/json')) {
+                const data = await response.json();
+                return { success: true, saved: !!data.saved, path: data.path };
+            }
             const blob = await response.blob();
             const contentDisposition = response.headers.get('Content-Disposition');
             const filename = this._parseContentDispositionFilename(contentDisposition);
             return { success: true, blob, filename };
         } catch (error) {
             return { success: false, error: error.message };
+        }
+    }
+
+    /**
+     * レポートMarkdownをサーバー側のダウンロード保存先に保存する（DOWNLOAD_SAVE_DIR が設定されている場合のみ）
+     */
+    async exportReport(researchId, content, filename) {
+        try {
+            const response = await fetch(`${this.baseURL}/research/export-report`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                mode: 'cors',
+                body: JSON.stringify({
+                    research_id: researchId,
+                    content: content,
+                    filename: filename || ''
+                })
+            });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                return { success: false, saved: false, error: data.detail || response.status };
+            }
+            return { success: true, saved: !!data.saved, path: data.path };
+        } catch (error) {
+            return { success: false, saved: false, error: error.message };
         }
     }
 }

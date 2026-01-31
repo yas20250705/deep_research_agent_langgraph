@@ -124,6 +124,20 @@ class ErrorResponse(BaseModel):
     details: Optional[Dict] = Field(None, description="詳細情報")
 
 
+class ResearchHistoryItem(BaseModel):
+    """履歴一覧の1件"""
+    research_id: str = Field(..., description="リサーチID")
+    theme: str = Field(..., description="調査テーマ")
+    status: str = Field(..., description="ステータス")
+    created_at: Optional[datetime] = Field(None, description="作成日時")
+    completed_at: Optional[datetime] = Field(None, description="完了日時")
+
+
+class ResearchHistoryResponse(BaseModel):
+    """履歴一覧レスポンス（サーバー再起動後の復元用）"""
+    items: List[ResearchHistoryItem] = Field(default_factory=list, description="履歴一覧")
+
+
 class HealthResponse(BaseModel):
     """ヘルスチェックレスポンス"""
     

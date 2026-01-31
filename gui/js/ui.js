@@ -98,8 +98,9 @@ class UI {
 
     /**
      * リサーチ結果をチャット形式で表示
+     * @param {Object} options - { scrollTo: 'top' | 'bottom' } 履歴から表示時は 'top' で調査クエリを最上部に
      */
-    displayResearchResult(result, researchId) {
+    displayResearchResult(result, researchId, options = {}) {
         let content = '';
 
         // 統計情報
@@ -191,8 +192,12 @@ class UI {
             });
         }
 
-        // スクロールを最下部に
-        this.scrollToBottom();
+        // スクロール：履歴から表示時は最上部（調査クエリ）、それ以外は最下部
+        if (options.scrollTo === 'top') {
+            this.scrollToTop();
+        } else {
+            this.scrollToBottom();
+        }
     }
 
     /**
@@ -419,6 +424,13 @@ class UI {
     }
 
     /**
+     * チャットエリアを最上部（調査クエリ）にスクロール
+     */
+    scrollToTop() {
+        this.chatMessagesEl.scrollTop = 0;
+    }
+
+    /**
      * 参照ソースセクションを追加
      * @param {string} [theme] - 人が入力した調査テーマ（query）。PDF冒頭タイトルに使用
      */
@@ -623,7 +635,9 @@ class UI {
                     
                     const queryForPdf = theme || '参照ソース';
                     const result = await api.generateSourcePdf(source, queryForPdf);
-                    if (result.success && result.blob) {
+                    if (result.success && result.saved) {
+                        this.showNotification(`✅ PDFをサーバーの保存先に保存しました: ${source.title}`, 'success');
+                    } else if (result.success && result.blob) {
                         const downloadUrl = URL.createObjectURL(result.blob);
                         const a = document.createElement('a');
                         a.href = downloadUrl;
@@ -648,9 +662,9 @@ class UI {
     }
 
     /**
-     * レポートをダウンロード
+     * レポートをダウンロード（DOWNLOAD_SAVE_DIR が設定されている場合はサーバー側にのみ保存）
      */
-    downloadReport(result, researchId) {
+    async downloadReport(result, researchId) {
         let content = `# ${result.theme || 'リサーチレポート'}\n\n`;
         content += `## レポート情報\n\n`;
         content += `- **作成日時**: ${new Date().toLocaleString('ja-JP')}\n`;
@@ -684,11 +698,20 @@ class UI {
             });
         }
 
+        // ファイル名に日本語を残す（禁止文字のみ除去: \ / : * ? " < > | 改行）
+        const safeTheme = (result.theme || 'research').substring(0, 50).replace(/[\\/:*?"<>|\n\r]/g, '_').trim() || 'research';
+        const downloadFilename = `report_${safeTheme}_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)}.md`;
+        // DOWNLOAD_SAVE_DIR が設定されている場合はサーバー側にのみ保存し、ブラウザのダウンロードフォルダには保存しない
+        const exportRes = await api.exportReport(researchId, content, downloadFilename);
+        if (exportRes.saved) {
+            this.showNotification('レポートをサーバーの保存先に保存しました', 'success');
+            return;
+        }
         const blob = new Blob([content], { type: 'text/markdown' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `report_${result.theme?.substring(0, 30).replace(/[^a-zA-Z0-9]/g, '_') || 'research'}_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)}.md`;
+        a.download = downloadFilename;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);

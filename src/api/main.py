@@ -18,7 +18,9 @@ from src.api.schemas import (
     ErrorResponse,
     HealthResponse,
     ProgressInfo,
-    ResearchStatistics
+    ResearchStatistics,
+    ResearchHistoryResponse,
+    ResearchHistoryItem,
 )
 from src.api.research_manager import research_manager
 from src.api.middleware import (
@@ -34,6 +36,7 @@ from src.utils.security import validate_theme, sanitize_error_message
 from src.utils.pdf_generator import generate_source_pdf, PDF_AVAILABLE
 from src.config.settings import Settings
 import logging
+import os
 
 logger = setup_logger()
 
@@ -126,6 +129,23 @@ async def create_research(
         )
 
 
+@app.get("/research/history", response_model=ResearchHistoryResponse)
+async def get_research_history():
+    """
+    永続化済みリサーチの一覧を返す（サーバー再起動後もGUIで履歴を復元するために使用）
+    """
+    items = research_manager.list_persisted_researches()
+    return ResearchHistoryResponse(
+        items=[ResearchHistoryItem(
+            research_id=x["research_id"],
+            theme=x["theme"],
+            status=x["status"],
+            created_at=x.get("created_at"),
+            completed_at=x.get("completed_at"),
+        ) for x in items]
+    )
+
+
 @app.get("/research/{research_id}", response_model=ResearchResultResponse)
 async def get_research(research_id: str):
     """
@@ -163,21 +183,30 @@ async def get_research(research_id: str):
             detail="リサーチ結果が見つかりません"
         )
     
-    # レポート情報を構築
+    # レポート情報を構築（result はメモリ上のオブジェクトまたは永続化ファイル由来の辞書）
     report = None
     if result.get("current_draft"):
-        report = {
-            "draft": result["current_draft"],
-            "sources": [
-                {
+        sources = []
+        for r in result.get("research_data", []) or []:
+            if isinstance(r, dict):
+                sources.append({
+                    "title": r.get("title", ""),
+                    "summary": r.get("summary", ""),
+                    "url": r.get("url", ""),
+                    "source": r.get("source", "tavily"),
+                    "relevance_score": r.get("relevance_score"),
+                })
+            else:
+                sources.append({
                     "title": r.title,
                     "summary": r.summary,
                     "url": r.url,
                     "source": r.source,
-                    "relevance_score": r.relevance_score
-                }
-                for r in result.get("research_data", [])
-            ]
+                    "relevance_score": r.relevance_score,
+                })
+        report = {
+            "draft": result["current_draft"],
+            "sources": sources,
         }
     
     # 統計情報
@@ -375,6 +404,46 @@ async def health_check():
     )
 
 
+@app.post("/research/export-report")
+async def export_report(body: Dict):
+    """
+    レポートMarkdownをサーバー側のダウンロード保存先に保存する。
+    DOWNLOAD_SAVE_DIR が設定されている場合のみ保存する（永続化データとは別の保存先）。
+    """
+    research_id = body.get("research_id") or ""
+    content = body.get("content") or ""
+    filename = body.get("filename") or ""
+    if not research_id or not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="research_id と content は必須です"
+        )
+    if not getattr(settings, "DOWNLOAD_SAVE_DIR", None) or not str(settings.DOWNLOAD_SAVE_DIR).strip():
+        return JSONResponse(content={"saved": False, "reason": "DOWNLOAD_SAVE_DIR が未設定です"})
+    if not filename.strip():
+        safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in research_id[:50])
+        filename = f"report_{safe}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+    if not filename.endswith(".md"):
+        filename = filename + ".md"
+    # ファイル名の禁止文字のみ除去（日本語などは残す）
+    _unsafe = set('\\/:*?"<>|\n\r')
+    filename = "".join("_" if c in _unsafe else c for c in filename)
+    save_dir = os.path.abspath(os.path.normpath(str(settings.DOWNLOAD_SAVE_DIR).strip()))
+    try:
+        os.makedirs(save_dir, exist_ok=True)
+        save_path = os.path.join(save_dir, filename)
+        with open(save_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        logger.info("レポートMDを保存しました: %s", save_path)
+        return JSONResponse(content={"saved": True, "path": save_path})
+    except Exception as e:
+        logger.warning("DOWNLOAD_SAVE_DIR へのレポート保存をスキップ: %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"レポートの保存に失敗しました: {str(e)}"
+        )
+
+
 @app.post("/source/pdf")
 async def generate_source_pdf_endpoint(source: Dict):
     """
@@ -418,6 +487,18 @@ async def generate_source_pdf_endpoint(source: Dict):
             c if c not in unsafe_chars else '_' for c in title[:80]
         ).strip() or "source"
         filename_utf8 = f"{safe_title_utf8}_{timestamp}.pdf"
+        # DOWNLOAD_SAVE_DIR が設定されている場合はサーバー側にのみ保存し、PDFバイナリは返さない（ブラウザのダウンロードフォルダには保存しない）
+        if getattr(settings, "DOWNLOAD_SAVE_DIR", None) and str(settings.DOWNLOAD_SAVE_DIR).strip():
+            save_dir = os.path.abspath(os.path.normpath(str(settings.DOWNLOAD_SAVE_DIR).strip()))
+            try:
+                os.makedirs(save_dir, exist_ok=True)
+                save_path = os.path.join(save_dir, filename_utf8)
+                with open(save_path, "wb") as f:
+                    f.write(pdf_buffer.getvalue())
+                logger.info("参照ソースPDFを保存しました: %s", save_path)
+                return JSONResponse(content={"saved": True, "path": save_path})
+            except Exception as e:
+                logger.warning("DOWNLOAD_SAVE_DIR へのPDF保存をスキップ: %s", e)
         filename_utf8_encoded = quote(filename_utf8, safe="._-()")
         content_disp = (
             f'attachment; filename="{filename_ascii}"; '

@@ -43,7 +43,7 @@ body {
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    overflow: hidden;
     position: fixed;
     height: 100vh;
     left: 0;
@@ -52,6 +52,7 @@ body {
 }
 
 .sidebar-header {
+    flex-shrink: 0;
     padding: 1.5rem;
     border-bottom: 1px solid var(--border-color);
 }
@@ -67,17 +68,81 @@ body {
     border-bottom: 1px solid var(--border-color);
 }
 
+/* 履歴セクション：残りスペースを占有し、超過分はスクロール */
+.sidebar-section:not(.sidebar-settings) {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.sidebar-section:not(.sidebar-settings) .history-list-wrapper {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-section:not(.sidebar-settings) .history-list {
+    flex: 1;
+    min-height: 0;
+    max-height: none; /* 残りスペースいっぱいを使用 */
+}
+
+/* 設定セクション：画面下部に固定 */
+.sidebar-settings {
+    flex-shrink: 0;
+    margin-top: auto;
+    border-bottom: none;
+}
+
 .sidebar-section h2 {
     font-size: 1rem;
     margin-bottom: 1rem;
     color: var(--text-primary);
 }
 
-/* 履歴リスト */
+/* 履歴リスト（最大10件分の高さ、超過分はスクロール） */
+.history-count {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    font-weight: normal;
+}
+
+.history-list-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
 .history-list {
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
+    max-height: 31rem; /* 約10件分（1件≒3rem） */
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding-right: 2px;
+}
+
+.history-list::-webkit-scrollbar {
+    width: 6px;
+}
+
+.history-list::-webkit-scrollbar-track {
+    background: var(--surface);
+    border-radius: 3px;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+    background: var(--border-color);
+    border-radius: 3px;
+}
+
+.history-list::-webkit-scrollbar-thumb:hover {
+    background: var(--text-secondary);
 }
 
 .history-item {
@@ -109,6 +174,8 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    cursor: pointer;
+    min-width: 0; /* flex子要素のテキスト省略を有効にする */
 }
 
 .history-item-delete {

@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None  # postgresql://user:password@localhost/dbname
     ENABLE_DB_PERSISTENCE: bool = False  # データベース永続化を有効化するか
     
+    # ダウンロードファイルの保存先（オプション）
+    # 指定すると、レポートMD・参照ソースPDFをダウンロード生成時にこのディレクトリにも保存する
+    # 例: DOWNLOAD_SAVE_DIR=C:/exports または /var/exports
+    DOWNLOAD_SAVE_DIR: str = ""
+
     # 制限設定
     MAX_ITERATIONS: int = 5
     MAX_SEARCH_RESULTS: int = 10

@@ -15,18 +15,20 @@
     <!-- サイドバー -->
     <aside id="sidebar" class="sidebar">
         <div class="sidebar-header">
-            <h1>🔍 リサーチエージェント</h1>
+            <h1>リサーチエージェント</h1>
             <button id="newChatBtn" class="btn btn-primary btn-full">➕ 新規チャット</button>
         </div>
 
         <div class="sidebar-section">
-            <h2>📜 履歴</h2>
-            <div id="historyList" class="history-list">
-                <!-- 履歴アイテムが動的に追加されます -->
+            <h2>📜 履歴 <span id="historyCount" class="history-count"></span></h2>
+            <div class="history-list-wrapper">
+                <div id="historyList" class="history-list">
+                    <!-- 履歴アイテムが動的に追加されます（最大10件表示、超過分はスクロール） -->
+                </div>
             </div>
         </div>
 
-        <div class="sidebar-section">
+        <div class="sidebar-section sidebar-settings">
             <h2>⚙️ 設定</h2>
             <div class="setting-item">
                 <label for="maxIterations">最大イテレーション数</label>
@@ -50,7 +52,7 @@
     <!-- メインコンテンツ -->
     <main class="main-content">
         <header class="main-header">
-            <h1>🔍 リサーチエージェント - チャット</h1>
+            <h1>リサーチエージェント - チャット</h1>
             <div id="connectionStatus" class="connection-status"></div>
         </header>
 

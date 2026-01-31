@@ -20,7 +20,7 @@ class App {
         // 設定の読み込み
         this.loadSettings();
         
-        // 履歴の読み込み
+        // 履歴の読み込み（localStorage）
         this.loadHistory();
         
         // イベントリスナーの設定
@@ -29,8 +29,49 @@ class App {
         // 初期ヘルスチェック
         this.checkHealth();
         
+        // サーバーから履歴を復元（API再起動後も履歴を表示するため）
+        this.syncHistoryFromServer();
+        
         // グローバルに公開
         window.app = this;
+    }
+
+    /**
+     * サーバーの永続化履歴と同期（API再起動後も履歴が見えるようにする）
+     * @param {number} retryCount - リトライ回数（サーバー起動直後の失敗時用）
+     */
+    async syncHistoryFromServer(retryCount = 0) {
+        const maxRetry = 3;
+        const retryDelayMs = 2000;
+        const result = await api.getResearchHistory();
+        if (result.success && result.items && result.items.length > 0) {
+            const ids = new Set(this.researchHistory.map(r => r.research_id));
+            let added = 0;
+            for (const item of result.items) {
+                if (ids.has(item.research_id)) continue;
+                this.researchHistory.unshift({
+                    research_id: item.research_id,
+                    theme: item.theme || '',
+                    title: item.theme || '無題のリサーチ',
+                    status: item.status || 'completed',
+                    created_at: item.created_at
+                });
+                ids.add(item.research_id);
+                added++;
+            }
+            if (added > 0) {
+                if (this.researchHistory.length > 50) {
+                    this.researchHistory = this.researchHistory.slice(0, 50);
+                }
+                this.saveHistory();
+                this.renderHistory();
+            }
+            return;
+        }
+        // サーバー未起動などで取得失敗時、履歴が空ならリトライ（API再起動直後に対応）
+        if (retryCount < maxRetry && this.researchHistory.length === 0) {
+            setTimeout(() => this.syncHistoryFromServer(retryCount + 1), retryDelayMs);
+        }
     }
 
     /**
@@ -94,20 +135,26 @@ class App {
     }
 
     /**
-     * 履歴の表示
+     * 履歴の表示（最大10件の高さで表示、超過分はスクロール＋スクロールボタン）
      */
     renderHistory() {
         const historyListEl = document.getElementById('historyList');
+        const countEl = document.getElementById('historyCount');
         historyListEl.innerHTML = '';
+
+        if (countEl) {
+            countEl.textContent = this.researchHistory.length > 0 ? `（${this.researchHistory.length}件）` : '';
+        }
 
         if (this.researchHistory.length === 0) {
             historyListEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.85rem;">履歴がありません</div>';
             return;
         }
 
-        this.researchHistory.forEach((research, index) => {
+        this.researchHistory.forEach((research) => {
             const item = document.createElement('div');
             item.className = 'history-item';
+            item.dataset.researchId = research.research_id;
             if (research.research_id === this.currentResearchId) {
                 item.classList.add('active');
             }
@@ -115,15 +162,12 @@ class App {
             const title = document.createElement('div');
             title.className = 'history-item-title';
             title.textContent = research.title || research.theme || '無題のリサーチ';
-            title.onclick = () => this.loadResearchFromHistory(research.research_id);
 
             const deleteBtn = document.createElement('button');
             deleteBtn.className = 'history-item-delete';
+            deleteBtn.type = 'button';
             deleteBtn.textContent = '🗑️';
-            deleteBtn.onclick = (e) => {
-                e.stopPropagation();
-                this.deleteResearchFromHistory(research.research_id);
-            };
+            deleteBtn.setAttribute('aria-label', '削除');
 
             item.appendChild(title);
             item.appendChild(deleteBtn);
@@ -149,8 +193,8 @@ class App {
                 ui.addMessage('user', research.theme);
             }
 
-            // 結果をチャット形式で表示
-            ui.displayResearchResult(result.data, researchId);
+            // 結果をチャット形式で表示（調査クエリを最上部に表示するようスクロール）
+            ui.displayResearchResult(result.data, researchId, { scrollTo: 'top' });
         } else {
             ui.showNotification('リサーチ結果の取得に失敗しました', 'error');
         }
@@ -229,6 +273,22 @@ class App {
         document.getElementById('healthCheckBtn').addEventListener('click', () => {
             this.checkHealth();
         });
+
+        // 履歴リスト：イベント委譲でクリックを処理（項目クリックで読み込み、削除ボタンで削除）
+        const historyListEl = document.getElementById('historyList');
+        if (historyListEl) {
+            historyListEl.addEventListener('click', (e) => {
+                const item = e.target.closest('.history-item');
+                if (!item) return;
+                const researchId = item.dataset.researchId;
+                if (!researchId) return;
+                if (e.target.closest('.history-item-delete')) {
+                    this.deleteResearchFromHistory(researchId);
+                    return;
+                }
+                this.loadResearchFromHistory(researchId);
+            });
+        }
     }
 
     /**
