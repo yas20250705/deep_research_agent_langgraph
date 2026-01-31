@@ -11,7 +11,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from src.graph.state import ResearchState
-from src.schemas.data_models import ResearchPlan
+from src.schemas.data_models import ResearchPlan, ensure_research_plan
 from src.prompts.supervisor_prompt import SUPERVISOR_PLANNING_PROMPT, SUPERVISOR_ROUTING_PROMPT
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
@@ -30,14 +30,18 @@ def extract_user_message(messages: list) -> str:
     メッセージ履歴からユーザーメッセージを抽出
     
     Args:
-        messages: メッセージ履歴
+        messages: メッセージ履歴（HumanMessage のリスト、またはチェックポイント復元時の dict のリスト）
     
     Returns:
         ユーザーメッセージの内容
     """
-    for message in reversed(messages):
+    for message in reversed(messages or []):
         if isinstance(message, HumanMessage):
-            return message.content
+            return message.content or ""
+        if isinstance(message, dict):
+            content = message.get("content") or (message.get("data") or {}).get("content")
+            if content is not None:
+                return content if isinstance(content, str) else str(content)
     return ""
 
 
@@ -72,15 +76,23 @@ def generate_research_plan(
         生成された調査計画
     """
     
+    # ユーザーからの追加指示（再計画で蓄積された内容を含む）。長い場合は先頭2000文字に制限
+    human_input = (state.get("human_input") or "").strip()
+    if human_input and len(human_input) > 2000:
+        human_input = human_input[:2000] + "..."
+    human_msg = f"テーマ: {theme}"
+    if human_input:
+        human_msg += f"\n\nユーザーからの追加指示（テーマの絞り込み・強調したい点・避けたい表現など）:\n{human_input}"
+
     prompt = ChatPromptTemplate.from_messages([
         ("system", SUPERVISOR_PLANNING_PROMPT),
-        ("human", f"テーマ: {theme}")
+        ("human", human_msg)
     ])
     
     chain = prompt | llm
     
-    # LLM呼び出し（リトライ付き）
-    response = call_llm_with_retry(chain.invoke, {"theme": theme})
+    # LLM呼び出し（リトライ付き）（human_msg に theme は既に含まれている）
+    response = call_llm_with_retry(chain.invoke, {})
     
     # JSONパース
     try:
@@ -168,7 +180,7 @@ def evaluate_progress(state: ResearchState) -> Dict[str, Any]:
     data_quality = sum(relevance_scores) / len(relevance_scores) if relevance_scores else 0.5
     
     # 網羅性（計画に対するカバレッジ）
-    plan = state.get("task_plan")
+    plan = ensure_research_plan(state.get("task_plan"))
     coverage = 0.0
     if plan and plan.search_queries:
         # 簡易的な評価（実際はより複雑なロジック）
@@ -214,17 +226,23 @@ def decide_next_action(
     
     # LLMに判断を委譲（複雑なケース）
     draft_status = "あり" if state.get("current_draft") else "なし"
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", SUPERVISOR_ROUTING_PROMPT),
-        ("human", f"""
+    routing_msg = f"""
         現在の状態:
         - 収集データ数: {progress['data_count']}
         - データ品質スコア: {progress['data_quality']:.2f}
         - イテレーション回数: {state['iteration_count']}
         - 最大イテレーション数: {settings.MAX_ITERATIONS}
         - ドラフト状態: {draft_status}
-        """)
+        """
+    human_input_routing = (state.get("human_input") or "").strip()
+    if human_input_routing and len(human_input_routing) > 500:
+        human_input_routing = human_input_routing[:500] + "..."
+    if human_input_routing:
+        routing_msg += f"\n\nユーザーからの指示: {human_input_routing}\nこの指示を考慮して next_action を決定すること。"
+    
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", SUPERVISOR_ROUTING_PROMPT),
+        ("human", routing_msg)
     ])
     
     chain = prompt | llm
@@ -313,6 +331,7 @@ def supervisor_node(state: ResearchState) -> ResearchState:
         plan = generate_research_plan(theme, state, llm)
         state["task_plan"] = plan
         logger.info(f"調査計画を生成: {plan.theme}")
+        state["human_input"] = None  # 使用済みの追加指示をクリア
     else:
         plan = state["task_plan"]
     
@@ -329,7 +348,41 @@ def supervisor_node(state: ResearchState) -> ResearchState:
     
     state["next_action"] = next_action
     
+    # ルーティング時にも human_input を使った場合はここでクリア
+    state["human_input"] = None
+    
     logger.info(f"Supervisor実行完了: next_action={next_action}, iteration={state['iteration_count']}")
     
+    return state
+
+
+@handle_node_errors
+def revise_plan_node(state: ResearchState) -> ResearchState:
+    """
+    Human input に基づいて調査計画を再生成するノード。
+    API の replan から呼ばれる場合は常に計画を再生成し、human_input をプロンプトに反映する。
+    チェックポイント復元時は messages が dict のリストになるため、_theme_fallback でテーマを補う。
+    """
+    settings = get_settings()
+    llm = get_llm_from_settings(settings, temperature=0)
+    # テーマ: messages から取得、空なら task_plan.theme または API が渡した _theme_fallback を使用
+    theme = extract_theme(extract_user_message(state.get("messages") or []))
+    if not theme and state.get("task_plan"):
+        plan_obj = state["task_plan"]
+        theme = getattr(plan_obj, "theme", None) or (plan_obj.get("theme") if isinstance(plan_obj, dict) else None) or ""
+    if not theme:
+        theme = state.get("_theme_fallback") or ""
+    plan = generate_research_plan(theme, state, llm)
+    state["task_plan"] = plan
+    state["human_input"] = None
+    logger.info(f"調査計画を再生成（human input 反映）: {plan.theme}")
+    return state
+
+
+def planning_gate_node(state: ResearchState) -> ResearchState:
+    """
+    計画段階の Human-in-loop 用ゲート。通過のみ（state をそのまま返す）。
+    Supervisor → planning_gate の前で中断し、Reviewer → researcher のループではこのノードを経由しないため中断しない。
+    """
     return state
 

@@ -9,6 +9,7 @@ import logging
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from src.graph.state import ResearchState
+from src.schemas.data_models import ensure_research_plan
 from src.prompts.writer_prompt import WRITER_SYSTEM_PROMPT, WRITER_USER_PROMPT
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
@@ -131,7 +132,7 @@ def writer_node(state: ResearchState) -> ResearchState:
         更新されたステート
     """
     
-    plan = state.get("task_plan")
+    plan = ensure_research_plan(state.get("task_plan"))
     if plan is None:
         logger.error("task_planが設定されていません")
         state["messages"].append(
@@ -165,6 +166,12 @@ def writer_node(state: ResearchState) -> ResearchState:
         if len(feedback) > 1000:
             feedback = feedback[:1000] + "...（省略）"
         feedback_context = f"\n\n前回のフィードバック:\n{feedback}\n\nこのフィードバックを反映してください。"
+    # ユーザーからの追加指示（強調したい点・避けたい表現など）。長い場合は先頭1000文字に制限
+    human_input = (state.get("human_input") or "").strip()
+    if human_input:
+        if len(human_input) > 1000:
+            human_input = human_input[:1000] + "..."
+        feedback_context += f"\n\nユーザーからの追加指示（強調したい点・避けたい表現など）:\n{human_input}\n\nこの追加指示を必ず反映してください。"
     
     # 調査観点をフォーマット（最大2000文字に制限）
     investigation_points = plan.investigation_points
@@ -201,6 +208,7 @@ def writer_node(state: ResearchState) -> ResearchState:
         draft = extract_markdown_content(response.content)
         state["current_draft"] = draft
         state["iteration_count"] = state.get("iteration_count", 0) + 1
+        state["human_input"] = None  # 使用済みの追加指示をクリア
         
         # メッセージ記録
         state["messages"].append(
@@ -239,6 +247,7 @@ def writer_node(state: ResearchState) -> ResearchState:
                 draft = extract_markdown_content(response.content)
                 state["current_draft"] = draft
                 state["iteration_count"] = state.get("iteration_count", 0) + 1
+                state["human_input"] = None  # 使用済みの追加指示をクリア
                 state["messages"].append(
                     AIMessage(content=f"⚠️ データを削減してドラフトを生成しました（長さ: {len(draft)}文字）")
                 )

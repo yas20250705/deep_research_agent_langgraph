@@ -110,13 +110,15 @@ class API {
 
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
-                throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
+                const msg = (errorData.detail && errorData.detail.message) || errorData.detail || `HTTP error! status: ${response.status}`;
+                const err = typeof msg === 'string' ? msg : (msg.message || JSON.stringify(msg));
+                return { success: false, error: err, notFound: response.status === 404 };
             }
 
             const data = await response.json();
             return { success: true, data, processing: false };
         } catch (error) {
-            return { success: false, error: error.message };
+            return { success: false, error: error.message, notFound: false };
         }
     }
 
@@ -145,8 +147,11 @@ class API {
 
     /**
      * 中断されたリサーチを再開
+     * @param {string} researchId - リサーチID
+     * @param {string} humanInput - 人間からの入力（調査開始では任意、再計画では指示に使用）
+     * @param {string} action - "resume"=調査再開, "replan"=計画再作成して再度HumanInLoop
      */
-    async resumeResearch(researchId, humanInput) {
+    async resumeResearch(researchId, humanInput, action = 'resume') {
         try {
             const response = await fetch(`${this.baseURL}/research/${researchId}/resume`, {
                 method: 'POST',
@@ -155,7 +160,8 @@ class API {
                 },
                 mode: 'cors',
                 body: JSON.stringify({
-                    human_input: humanInput
+                    human_input: humanInput || '',
+                    action: action || 'resume'
                 })
             });
 

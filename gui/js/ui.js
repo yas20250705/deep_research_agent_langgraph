@@ -276,46 +276,111 @@ class UI {
     }
 
     /**
-     * 人間介入の入力フォームを表示（チャット形式）
+     * 人間介入の入力フォームを表示（チャット形式）。中断時のコンテキストがあれば入力フォームの上に表示する。
      */
-    showHumanInputForm(researchId, onResume) {
-        // チャットメッセージとして表示
+    showHumanInputForm(researchId, onResume, interruptedState) {
         const messageEl = document.createElement('div');
         messageEl.className = 'message assistant';
         this.chatMessagesEl.appendChild(messageEl);
 
         const contentEl = document.createElement('div');
         contentEl.className = 'message-content';
+
+        let contextHtml = '';
+        if (interruptedState) {
+            const nextLabels = {
+                writer: '次: Writer（レポート執筆）',
+                researcher: '次: Researcher（情報収集）',
+                supervisor: '次: Supervisor（計画立案）',
+                planning_gate: '次: Researcher（情報収集）',
+                revise_plan: '次: 計画の再作成（human input を反映）',
+                reviewer: '次: Reviewer（レビュー）'
+            };
+            const nextLabel = nextLabels[interruptedState.next_node] || `次: ${interruptedState.next_node || '不明'}`;
+            contextHtml += `<div style="margin-bottom: 1rem; padding: 0.75rem; background: #e8f4f8; border-radius: 6px; font-size: 0.9rem;"><strong>${nextLabel}</strong></div>`;
+            // 調査計画（常に表示・開いた状態。データがなければ「なし」）
+            const plan = interruptedState.task_plan || {};
+            const theme = plan.theme || '';
+            const planText = (plan.plan_text || '').substring(0, 200);
+            const points = (plan.investigation_points || []).slice(0, 5).join('、');
+            const planContent = (theme || planText || points) ? `テーマ: ${this._escapeHtml(theme)}<br>${this._escapeHtml(planText)}${planText.length >= 200 ? '...' : ''}<br>観点: ${this._escapeHtml(points)}` : '<span style="color:#666;">（なし）</span>';
+            contextHtml += `<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">調査計画</summary><div style="padding: 0.5rem 0; font-size: 0.85rem;">${planContent}</div></details>`;
+            // 収集ソース（常に表示・開いた状態。0件の場合は「なし」）
+            const sources = interruptedState.research_data_summary || [];
+            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">収集ソース（' + sources.length + '件）</summary>';
+            if (sources.length > 0) {
+                contextHtml += '<ul style="margin: 0.25rem 0; padding-left: 1.25rem; font-size: 0.85rem; max-height: 120px; overflow-y: auto;">';
+                sources.forEach(s => {
+                    contextHtml += `<li><a href="${this._escapeHtml(s.url || '#')}" target="_blank" rel="noopener">${this._escapeHtml((s.title || '').substring(0, 60))}${(s.title || '').length > 60 ? '...' : ''}</a></li>`;
+                });
+                contextHtml += '</ul>';
+            } else {
+                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
+            }
+            contextHtml += '</details>';
+            // 現在のドラフト（常に表示・開いた状態。なければ「なし」）
+            const draftPreview = interruptedState.current_draft_preview || '';
+            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">現在のドラフト（プレビュー）</summary>';
+            if (draftPreview) {
+                contextHtml += '<pre style="margin: 0.25rem 0; padding: 0.5rem; background: #f5f5f5; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; max-height: 150px; overflow-y: auto;">' + this._escapeHtml(draftPreview) + '</pre>';
+            } else {
+                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
+            }
+            contextHtml += '</details>';
+            // Reviewerフィードバック（常に表示。なければ「なし」）
+            const feedback = interruptedState.feedback != null && interruptedState.feedback !== '' ? (interruptedState.feedback + '').substring(0, 300) : '';
+            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">Reviewerフィードバック</summary>';
+            if (feedback) {
+                contextHtml += '<div style="padding: 0.5rem 0; font-size: 0.85rem;">' + this._escapeHtml(feedback) + ((interruptedState.feedback + '').length > 300 ? '...' : '') + '</div>';
+            } else {
+                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
+            }
+            contextHtml += '</details>';
+        }
+
         contentEl.innerHTML = `
+            ${contextHtml}
             <div style="padding: 1rem; background-color: #fff3cd; border: 1px solid #ffc107; border-radius: 8px;">
                 <h3 style="margin-bottom: 1rem;">⏸️ リサーチが中断されました</h3>
-                <p style="margin-bottom: 1rem;">人間の入力が必要です。以下に入力してください。</p>
-                <textarea id="humanInput" class="message-input" rows="3" placeholder="入力してください..." style="width: 100%; margin-bottom: 0.5rem;"></textarea>
-                <button id="resumeResearchBtn" class="btn btn-primary">再開</button>
+                <p style="margin-bottom: 1rem;">必要に応じて入力し、調査開始（再開）または再計画を選んでください。</p>
+                <textarea id="humanInput" class="message-input" rows="3" placeholder="入力してください（任意）。再計画の場合は指示を入力..." style="width: 100%; margin-bottom: 0.5rem;"></textarea>
+                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                    <button id="resumeResearchBtn" class="btn btn-primary">調査開始</button>
+                    <button id="replanBtn" class="btn btn-secondary">再計画</button>
+                </div>
             </div>
         `;
         messageEl.appendChild(contentEl);
 
-        const resumeBtn = document.getElementById('resumeResearchBtn');
-        const humanInput = document.getElementById('humanInput');
-        
-        resumeBtn.addEventListener('click', () => {
-            const input = humanInput.value.trim();
-            if (input) {
-                onResume(researchId, input);
-            } else {
-                ui.showNotification('入力が必要です', 'warning');
-            }
-        });
+        const resumeBtn = contentEl.querySelector('#resumeResearchBtn');
+        const replanBtn = contentEl.querySelector('#replanBtn');
+        const humanInputEl = contentEl.querySelector('#humanInput');
+        if (resumeBtn && humanInputEl) {
+            resumeBtn.addEventListener('click', () => {
+                onResume(researchId, humanInputEl.value.trim(), 'resume');
+            });
+        }
+        if (replanBtn && humanInputEl) {
+            replanBtn.addEventListener('click', () => {
+                onResume(researchId, humanInputEl.value.trim(), 'replan');
+            });
+        }
+        if (humanInputEl) {
+            humanInputEl.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' && e.ctrlKey) {
+                    resumeBtn.click();
+                }
+            });
+        }
 
-        humanInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && e.ctrlKey) {
-                resumeBtn.click();
-            }
-        });
-
-        // スクロールを最下部に
         this.scrollToBottom();
+    }
+
+    _escapeHtml(text) {
+        if (text == null) return '';
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     /**

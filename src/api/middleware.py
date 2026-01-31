@@ -6,6 +6,7 @@ APIミドルウェア
 
 from fastapi import Request, HTTPException, status
 from fastapi.security import APIKeyHeader, HTTPBearer
+from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from typing import Optional, Dict
@@ -70,15 +71,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # ヘルスチェックエンドポイントはスキップ
         if request.url.path == "/health":
             return await call_next(request)
+        # ステータス輪詢（GET /research/{id}/status）はレート制限の対象外（GUI の 1 秒ポーリングで超過しないように）
+        path = request.url.path
+        if request.method == "GET" and path.startswith("/research/") and path.endswith("/status"):
+            return await call_next(request)
         
         # クライアント識別子を取得（IPアドレスまたはAPIキー）
         client_id = self._get_client_id(request)
         
-        # レート制限チェック
+        # レート制限チェック（ミドルウェアからは raise せず Response を返すと 429 が正しく返る）
         if not self._check_rate_limit(client_id):
-            raise HTTPException(
+            return JSONResponse(
                 status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="レート制限を超過しました。しばらく待ってから再試行してください。"
+                content={"detail": "レート制限を超過しました。しばらく待ってから再試行してください。"},
             )
         
         response = await call_next(request)

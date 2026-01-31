@@ -51,6 +51,20 @@ class ResearchPlan(BaseModel):
     }
 
 
+def ensure_research_plan(plan) -> Optional[ResearchPlan]:
+    """
+    task_plan が dict（チェックポイント復元や update_state 経由）の場合に ResearchPlan に正規化する。
+    ノード内で plan.search_queries 等を安全に参照するために使用する。
+    """
+    if plan is None:
+        return None
+    if isinstance(plan, ResearchPlan):
+        return plan
+    if isinstance(plan, dict):
+        return ResearchPlan(**plan)
+    return None
+
+
 class SearchResult(BaseModel):
     """検索結果モデル（共通スキーマ）"""
     

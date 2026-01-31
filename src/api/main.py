@@ -14,6 +14,7 @@ from src.api.schemas import (
     ResearchResponse,
     ResearchResultResponse,
     StatusResponse,
+    InterruptedStateResponse,
     ResumeRequest,
     ErrorResponse,
     HealthResponse,
@@ -162,7 +163,10 @@ async def get_research(research_id: str):
     if research is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="指定されたリサーチIDが見つかりません"
+            detail={
+                "error": "not_found",
+                "message": "指定されたリサーチIDが見つかりません。サーバー再起動後は、完了したリサーチのみ参照できます。",
+            }
         )
     
     # 処理中の場合は422を返す
@@ -180,7 +184,10 @@ async def get_research(research_id: str):
     if result is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="リサーチ結果が見つかりません"
+            detail={
+                "error": "result_not_found",
+                "message": "リサーチ結果が見つかりません。",
+            }
         )
     
     # レポート情報を構築（result はメモリ上のオブジェクトまたは永続化ファイル由来の辞書）
@@ -250,17 +257,21 @@ async def get_research_status(research_id: str):
         )
     
     research = research_manager.get_research(research_id)
-    state = status_info.get("state")
+    raw_state = status_info.get("state") or {}
+    state = raw_state if isinstance(raw_state, dict) else {}
     
     # 進捗情報
     progress = None
     if state:
-        # 次のノードを取得（デフォルトは"supervisor"）
+        # 次のノードを取得（list/tuple の場合は先頭要素、デフォルトは"supervisor"）
         next_nodes = status_info.get("next")
         if next_nodes and len(next_nodes) > 0:
-            current_node = next_nodes[0] if isinstance(next_nodes, list) else str(next_nodes)
+            first = next_nodes[0] if isinstance(next_nodes, (list, tuple)) else next_nodes
+            current_node = first if isinstance(first, str) else str(first)
         else:
             current_node = "supervisor"  # デフォルト値
+        if current_node not in ("supervisor", "planning_gate", "revise_plan", "researcher", "writer", "reviewer", "unknown", "end"):
+            current_node = "unknown"
         
         progress = ProgressInfo(
             current_iteration=state.get("iteration_count", 0),
@@ -281,12 +292,44 @@ async def get_research_status(research_id: str):
             )
         )
     
+    # 中断時のみ: 次に実行されるノードと state の一部を返す（state が空でも next_node は返す）
+    interrupted_state = None
+    if status_info["status"] == "interrupted":
+        next_nodes = status_info.get("next")
+        if next_nodes and len(next_nodes) > 0:
+            first = next_nodes[0] if isinstance(next_nodes, (list, tuple)) else next_nodes
+            next_node = first if isinstance(first, str) else str(first)
+        else:
+            next_node = "supervisor"
+        task_plan_raw = state.get("task_plan")
+        task_plan_dict = None
+        if task_plan_raw is not None:
+            task_plan_dict = task_plan_raw.model_dump() if hasattr(task_plan_raw, "model_dump") else task_plan_raw
+        research_data_raw = state.get("research_data") or []
+        research_data_summary = []
+        for r in research_data_raw[:20]:
+            if isinstance(r, dict):
+                research_data_summary.append({"title": r.get("title", ""), "url": r.get("url", "")})
+            else:
+                research_data_summary.append({"title": getattr(r, "title", ""), "url": getattr(r, "url", "")})
+        draft = state.get("current_draft") or ""
+        current_draft_preview = draft[:500] + "..." if len(draft) > 500 else (draft if draft else None)
+        feedback_val = state.get("feedback")
+        interrupted_state = InterruptedStateResponse(
+            next_node=next_node,
+            task_plan=task_plan_dict,
+            research_data_summary=research_data_summary,
+            current_draft_preview=current_draft_preview,
+            feedback=feedback_val,
+        )
+    
     return StatusResponse(
         research_id=research_id,
         status=status_info["status"],
         progress=progress,
         statistics=statistics,
-        last_updated=datetime.now()
+        last_updated=datetime.now(),
+        interrupted_state=interrupted_state,
     )
 
 
@@ -319,17 +362,22 @@ async def resume_research(research_id: str, request: ResumeRequest):
             }
         )
     
-    success = research_manager.resume_research(research_id, request.human_input)
+    success = research_manager.resume_research(
+        research_id,
+        request.human_input or "",
+        request.action
+    )
     if not success:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="リサーチの再開に失敗しました"
         )
     
+    message = "計画を再作成しました" if request.action == "replan" else "リサーチを再開しました"
     return ResearchResponse(
         research_id=research_id,
         status="processing",
-        message="リサーチを再開しました",
+        message=message,
         created_at=research["created_at"]
     )
 
@@ -522,6 +570,13 @@ async def generate_source_pdf_endpoint(source: Dict):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"PDF生成に失敗しました: {str(e)}"
         )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """HTTPException は正しいステータスコードで返す（429 等が 500 にならないように）"""
+    content = exc.detail if isinstance(exc.detail, dict) else {"detail": exc.detail}
+    return JSONResponse(status_code=exc.status_code, content=content)
 
 
 @app.exception_handler(Exception)

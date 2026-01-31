@@ -9,6 +9,7 @@ import logging
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import AIMessage
 from src.graph.state import ResearchState
+from src.schemas.data_models import ensure_research_plan
 from src.prompts.reviewer_prompt import REVIEWER_SYSTEM_PROMPT, REVIEWER_USER_PROMPT
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
@@ -48,12 +49,13 @@ def format_task_plan_for_review(plan) -> str:
     レビュー用に調査計画をフォーマット
     
     Args:
-        plan: 調査計画
+        plan: 調査計画（ResearchPlan または dict）
     
     Returns:
         フォーマットされたテキスト
     """
     
+    plan = ensure_research_plan(plan)
     if plan is None:
         return "計画なし"
     

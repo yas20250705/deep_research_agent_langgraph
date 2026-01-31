@@ -14,6 +14,7 @@ from typing import Dict, Optional, Any
 from langchain_core.messages import HumanMessage
 from src.graph.graph_builder import build_graph
 from src.graph.state import ResearchState
+from src.nodes.supervisor import revise_plan_node
 from src.utils.checkpointer import create_checkpointer
 from src.utils.logger import setup_logger
 import logging
@@ -115,13 +116,21 @@ class ResearchManager:
         checkpointer = create_checkpointer(checkpointer_type)
         
         # グラフ構築
-        interrupt_before = ["supervisor", "writer"] if enable_human_intervention else None
+        # 人間介入時: planning_gate の前でのみ中断（Supervisor→planning_gate の初回のみ）。Reviewer→researcher のループでは planning_gate を経由しないため中断しない
+        interrupt_before = ["planning_gate"] if enable_human_intervention else None
         graph = build_graph(
             checkpointer=checkpointer,
             interrupt_before=interrupt_before
         )
         
-        # 初期ステート作成
+        # 設定
+        config = {
+            "configurable": {
+                "thread_id": research_id
+            }
+        }
+        
+        # 初期ステート作成（人間介入の有無にかかわらず共通）
         initial_state: ResearchState = {
             "messages": [HumanMessage(content=theme)],
             "task_plan": None,
@@ -131,14 +140,8 @@ class ResearchManager:
             "iteration_count": 0,
             "next_action": "research",
             "human_input_required": False,
-            "human_input": None
-        }
-        
-        # 設定
-        config = {
-            "configurable": {
-                "thread_id": research_id
-            }
+            "human_input": None,
+            "human_input_accumulated": None,
         }
         
         # リサーチ情報を保存
@@ -149,14 +152,16 @@ class ResearchManager:
             "max_iterations": max_iterations,
             "created_at": datetime.now(),
             "config": config,
-            "enable_human_intervention": enable_human_intervention
+            "enable_human_intervention": enable_human_intervention,
+            "waiting_initial_input": False,
+            "pending_next": None,
         }
         
         self.graphs[research_id] = graph
         
-        # 非同期で実行開始
+        # 人間介入あり: 作成時に invoke し、Supervisor で計画を作成して revise_plan の前で中断 → 1回目の HumanInLoop で計画を表示
+        # 人間介入なし: 従来どおり即開始
         asyncio.create_task(self._run_research(research_id, initial_state, config))
-        
         logger.info(f"リサーチを作成: research_id={research_id}, theme={theme}")
         
         return research_id
@@ -184,14 +189,23 @@ class ResearchManager:
             # 実行
             result = graph.invoke(initial_state, config)
             
-            # 結果を保存
-            self.researches[research_id].update({
-                "status": "completed",
-                "result": result,
-                "completed_at": datetime.now()
-            })
-            self._save_research(research_id)
-            logger.info(f"リサーチ完了: research_id={research_id}")
+            # 中断されたかどうかを判定（interrupt_before で停止した場合）
+            graph_state = graph.get_state(config)
+            next_nodes = graph_state.next if hasattr(graph_state, "next") else ()
+            if next_nodes and len(next_nodes) > 0:
+                self.researches[research_id].update({
+                    "status": "interrupted",
+                    "result": result,
+                })
+                logger.info(f"リサーチが中断されました: research_id={research_id}, next={next_nodes}")
+            else:
+                self.researches[research_id].update({
+                    "status": "completed",
+                    "result": result,
+                    "completed_at": datetime.now()
+                })
+                self._save_research(research_id)
+                logger.info(f"リサーチ完了: research_id={research_id}")
             
         except Exception as e:
             logger.error(f"リサーチエラー: research_id={research_id}, error={e}", exc_info=True)
@@ -325,23 +339,39 @@ class ResearchManager:
         if graph is None:
             return None
         
-        # グラフの状態を取得
-        state = graph.get_state(research["config"])
+        # 調査開始待ち（human input で開始）の場合はチェックポイントがまだない
+        if research.get("waiting_initial_input"):
+            return {
+                "research_id": research_id,
+                "status": research["status"],
+                "state": {},
+                "next": research.get("pending_next") or ("supervisor",),
+            }
         
+        # グラフの状態を取得（中断時のコンテキスト表示のため state は必ず plain dict で返す）
+        state = graph.get_state(research["config"])
+        raw_values = state.values if state.values is not None else {}
+        state_values = dict(raw_values) if raw_values else {}
+        next_nodes = state.next if hasattr(state, "next") else ()
         return {
             "research_id": research_id,
             "status": research["status"],
-            "state": state.values if state.values else None,
-            "next": state.next if hasattr(state, 'next') else None
+            "state": state_values,
+            "next": next_nodes,
         }
     
-    def resume_research(self, research_id: str, human_input: str) -> bool:
+    def resume_research(self, research_id: str, human_input: str, action: str = "resume") -> bool:
         """
         中断されたリサーチを再開
+        
+        - 調査開始待ち（waiting_initial_input）のとき: human input で調査を開始し、invoke する。
+        - action=resume: ステートに human_input をセットしてグラフを再開（次のノード実行）。
+        - action=replan: revise_plan_node で計画を再生成し、チェックポイントのみ更新（invoke しない）。
         
         Args:
             research_id: リサーチID
             human_input: 人間からの入力
+            action: "resume"=調査再開, "replan"=計画再作成して再度HumanInLoop
         
         Returns:
             成功したかどうか
@@ -358,18 +388,79 @@ class ResearchManager:
         if graph is None:
             return False
         
+        config = research["config"]
+        
         try:
-            # ステートを更新
-            graph.update_state(research["config"], {"human_input": human_input})
+            # 調査開始待ち: human input によりここで初めてグラフを開始する
+            if research.get("waiting_initial_input"):
+                theme = research.get("theme", "")
+                initial_state: ResearchState = {
+                    "messages": [HumanMessage(content=theme)],
+                    "task_plan": None,
+                    "research_data": [],
+                    "current_draft": None,
+                    "feedback": None,
+                    "iteration_count": 0,
+                    "next_action": "research",
+                    "human_input_required": False,
+                    "human_input": (human_input or "").strip() or None,
+                    "human_input_accumulated": None,
+                }
+                research["waiting_initial_input"] = False
+                research["pending_next"] = None
+                research["status"] = "processing"
+                asyncio.create_task(self._run_research(research_id, initial_state, config))
+                logger.info(f"リサーチを開始（human input）: research_id={research_id}")
+                return True
             
-            # 再開
-            result = graph.invoke(None, research["config"])
+            if action == "replan":
+                # 再計画: 先に入力された human input も蓄積して考慮し、revise_plan_node で計画を再作成
+                state_snapshot = graph.get_state(config)
+                raw_values = state_snapshot.values if state_snapshot.values else {}
+                state_copy = dict(raw_values)
+                new_input = (human_input or "").strip()
+                previous_accumulated = (state_copy.get("human_input_accumulated") or "").strip()
+                combined_input = (
+                    f"{previous_accumulated}\n\n--- 追加指示 ---\n\n{new_input}".strip()
+                    if previous_accumulated and new_input
+                    else (previous_accumulated or new_input or None)
+                )
+                state_copy["human_input"] = combined_input
+                state_copy["human_input_accumulated"] = combined_input
+                state_copy["_theme_fallback"] = research.get("theme", "")
+                result_state = revise_plan_node(state_copy)
+                task_plan = result_state.get("task_plan")
+                task_plan_dict = task_plan.model_dump() if hasattr(task_plan, "model_dump") else task_plan
+                graph.update_state(config, {
+                    "task_plan": task_plan_dict,
+                    "human_input": None,
+                    "human_input_accumulated": result_state.get("human_input_accumulated"),
+                })
+                logger.info(f"計画を再作成（replan）: research_id={research_id}")
+                return True
             
-            # 結果を保存
-            research.update({
-                "status": "processing",
-                "result": result
-            })
+            # 調査再開: ステートを更新してグラフを再開
+            graph.update_state(config, {"human_input": human_input or ""})
+            result = graph.invoke(None, config)
+            
+            # 中断されたかどうかを判定（interrupt_before で停止した場合）
+            graph_state = graph.get_state(config)
+            next_nodes = graph_state.next if hasattr(graph_state, "next") else ()
+            if next_nodes and len(next_nodes) > 0:
+                research.update({
+                    "status": "interrupted",
+                    "result": result,
+                })
+                logger.info(f"リサーチが再開後に中断: research_id={research_id}, next={next_nodes}")
+            else:
+                # グラフが END まで到達した場合は完了扱いにする（最大イテレーション等）
+                research.update({
+                    "status": "completed",
+                    "result": result,
+                    "completed_at": datetime.now(),
+                })
+                self._save_research(research_id)
+                logger.info(f"リサーチ再開後に完了: research_id={research_id}")
             
             logger.info(f"リサーチを再開: research_id={research_id}")
             return True

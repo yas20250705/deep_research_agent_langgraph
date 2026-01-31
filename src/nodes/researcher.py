@@ -9,7 +9,7 @@ from typing import List, Optional
 from functools import partial
 from langchain_core.messages import AIMessage
 from src.graph.state import ResearchState
-from src.schemas.data_models import SearchResult
+from src.schemas.data_models import SearchResult, ensure_research_plan
 from src.tools.search_tool import tavily_search_tool
 from src.config.settings import Settings
 from src.utils.error_handler import handle_node_errors
@@ -131,7 +131,7 @@ def researcher_node(state: ResearchState) -> ResearchState:
         更新されたステート
     """
     
-    plan = state.get("task_plan")
+    plan = ensure_research_plan(state.get("task_plan"))
     if plan is None:
         logger.error("task_planが設定されていません")
         state["messages"].append(

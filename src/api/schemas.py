@@ -6,7 +6,7 @@ FastAPI用のリクエスト・レスポンスモデル
 
 from pydantic import BaseModel, Field
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Literal
 from src.schemas.data_models import ResearchPlan, SearchResult, ResearchReport
 
 
@@ -67,7 +67,7 @@ class ProgressInfo(BaseModel):
     current_node: str = Field(
         ...,
         description="現在実行中のノード",
-        pattern="^(supervisor|researcher|writer|reviewer|unknown|end)$"
+        pattern="^(supervisor|planning_gate|revise_plan|researcher|writer|reviewer|unknown|end)$"
     )
     nodes_completed: List[str] = Field(
         default_factory=list,
@@ -100,6 +100,19 @@ class ResearchResultResponse(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="完了日時（完了時のみ）")
 
 
+class InterruptedStateResponse(BaseModel):
+    """中断時のステート（人間入力前に確認用）"""
+    
+    next_node: str = Field(..., description="次に実行されるノード（supervisor / writer）")
+    task_plan: Optional[Dict] = Field(None, description="調査計画（あれば）")
+    research_data_summary: List[Dict] = Field(
+        default_factory=list,
+        description="収集ソースの要約（タイトル・URL等、最大20件）"
+    )
+    current_draft_preview: Optional[str] = Field(None, description="現在のドラフトの先頭プレビュー（最大500文字）")
+    feedback: Optional[str] = Field(None, description="Reviewerのフィードバック（あれば）")
+
+
 class StatusResponse(BaseModel):
     """ステータスレスポンス"""
     
@@ -108,12 +121,17 @@ class StatusResponse(BaseModel):
     progress: Optional[ProgressInfo] = Field(None, description="進捗情報")
     statistics: Optional[ResearchStatistics] = Field(None, description="統計情報")
     last_updated: datetime = Field(..., description="最終更新日時")
+    interrupted_state: Optional[InterruptedStateResponse] = Field(
+        None,
+        description="中断時のみ。次に実行されるノードと state の一部"
+    )
 
 
 class ResumeRequest(BaseModel):
     """再開リクエスト"""
     
-    human_input: str = Field(..., description="人間からの入力", min_length=1)
+    human_input: Optional[str] = Field(default="", description="人間からの入力（調査開始では任意、再計画では指示に使用）")
+    action: Literal["resume", "replan"] = Field(default="resume", description="resume=調査再開, replan=計画再作成して再度HumanInLoop")
 
 
 class ErrorResponse(BaseModel):

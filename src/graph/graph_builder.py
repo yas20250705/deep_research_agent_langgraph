@@ -8,7 +8,7 @@ from typing import Optional, List
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from src.graph.state import ResearchState
-from src.nodes.supervisor import supervisor_node
+from src.nodes.supervisor import supervisor_node, planning_gate_node
 from src.nodes.researcher import researcher_node
 from src.nodes.writer import writer_node
 from src.nodes.reviewer import reviewer_node
@@ -47,6 +47,7 @@ def build_graph(
     
     # ノード追加
     graph.add_node("supervisor", supervisor_node)
+    graph.add_node("planning_gate", planning_gate_node)
     graph.add_node("researcher", researcher_node)
     graph.add_node("writer", writer_node)
     graph.add_node("reviewer", reviewer_node)
@@ -54,16 +55,19 @@ def build_graph(
     # エントリーポイント
     graph.set_entry_point("supervisor")
     
-    # Supervisorからの条件分岐
+    # Supervisorからの条件分岐（research のときは planning_gate 経由で Human-in-loop の中断ポイントへ）
     graph.add_conditional_edges(
         "supervisor",
         route_supervisor,
         {
-            "research": "researcher",
+            "research": "planning_gate",
             "write": "writer",
             "end": END
         }
     )
+    
+    # planning_gate → researcher（計画段階の中断は planning_gate の前のみ。Reviewer→researcher はこの経路を通らない）
+    graph.add_edge("planning_gate", "researcher")
     
     # Researcher → Supervisor（常に）
     graph.add_edge("researcher", "supervisor")

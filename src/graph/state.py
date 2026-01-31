@@ -58,6 +58,9 @@ class ResearchState(TypedDict):
     # 人間からの入力
     human_input: Optional[str]
 
+    # 再計画時に蓄積する human input（先に入力された内容も考慮するため）
+    human_input_accumulated: Optional[str]
+
 
 
 

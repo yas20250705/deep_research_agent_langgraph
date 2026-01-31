@@ -196,7 +196,10 @@ class App {
             // 結果をチャット形式で表示（調査クエリを最上部に表示するようスクロール）
             ui.displayResearchResult(result.data, researchId, { scrollTo: 'top' });
         } else {
-            ui.showNotification('リサーチ結果の取得に失敗しました', 'error');
+            const message = result.notFound
+                ? 'このリサーチは見つかりません。サーバー再起動後は、完了したリサーチのみ参照できます。'
+                : (result.error || 'リサーチ結果の取得に失敗しました');
+            ui.showNotification(message, 'error');
         }
     }
 
@@ -433,7 +436,10 @@ class App {
 
                         ui.showNotification('リサーチが完了しました！', 'success');
                     } else {
-                        ui.showNotification('結果の取得に失敗しました', 'error');
+                        const msg = result.notFound
+                            ? '結果の取得に失敗しました（リサーチが見つかりません）'
+                            : (result.error || '結果の取得に失敗しました');
+                        ui.showNotification(msg, 'error');
                     }
                 } else {
                     // 進捗メッセージを削除してから失敗メッセージを表示
@@ -445,17 +451,33 @@ class App {
                 this.stopMonitoring();
                 ui.showLoading(false);
                 ui.clearProgress();
-                ui.showHumanInputForm(researchId, async (id, input) => {
+                // 中断時は必ずステータスを再取得し、計画・ソース・ドラフト・フィードバックを確実に取得する
+                let interruptedState = statusData.interrupted_state || null;
+                const freshStatus = await api.getResearchStatus(researchId);
+                if (freshStatus.success && freshStatus.data) {
+                    interruptedState = freshStatus.data.interrupted_state || interruptedState;
+                }
+                // APIから取得できなかった場合でも、コンテキスト欄を表示するため最小のオブジェクトを渡す
+                if (!interruptedState) {
+                    interruptedState = {
+                        next_node: '不明',
+                        task_plan: null,
+                        research_data_summary: [],
+                        current_draft_preview: null,
+                        feedback: null
+                    };
+                }
+                ui.showHumanInputForm(researchId, async (id, input, action) => {
                     ui.showLoading(true);
-                    const result = await api.resumeResearch(id, input);
+                    const result = await api.resumeResearch(id, input, action || 'resume');
                     if (result.success) {
-                        ui.showNotification('リサーチを再開しました', 'success');
+                        ui.showNotification(result.data && result.data.message ? result.data.message : (action === 'replan' ? '計画を再作成しました' : 'リサーチを再開しました'), 'success');
                         this.startMonitoring(id);
                     } else {
                         ui.showLoading(false);
                         ui.showNotification(`再開に失敗しました: ${result.error}`, 'error');
                     }
-                });
+                }, interruptedState);
             }
 
             // タイムアウト
