@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException, status, Depends, Request
 from fastapi.responses import JSONResponse, Response
 from datetime import datetime, timedelta
 from typing import Dict, Optional
+from urllib.parse import quote
 from src.api.schemas import (
     ResearchRequest,
     ResearchResponse,
@@ -402,19 +403,31 @@ async def generate_source_pdf_endpoint(source: Dict):
         theme = source.get('theme', '参照ソース')
         pdf_buffer = generate_source_pdf(source, theme)
         
-        # ファイル名を生成（HTTPヘッダーは latin-1 のため ASCII のみ使用）
+        # ファイル名を生成
         title = source.get('title', 'source')
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        # ASCII フォールバック（古いクライアント用）
         safe_title_ascii = "".join(
             c if ord(c) < 128 and (c.isalnum() or c in (' ', '-', '_')) else '_'
             for c in title[:50]
         ).strip() or "source"
-        filename_ascii = f"{safe_title_ascii}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-        
+        filename_ascii = f"{safe_title_ascii}_{timestamp}.pdf"
+        # 日本語対応: RFC 5987 filename*=UTF-8'' で UTF-8 ファイル名を送る
+        unsafe_chars = {'\\', '/', ':', '*', '?', '"', '<', '>', '|', '\n', '\r'}
+        safe_title_utf8 = "".join(
+            c if c not in unsafe_chars else '_' for c in title[:80]
+        ).strip() or "source"
+        filename_utf8 = f"{safe_title_utf8}_{timestamp}.pdf"
+        filename_utf8_encoded = quote(filename_utf8, safe="._-()")
+        content_disp = (
+            f'attachment; filename="{filename_ascii}"; '
+            f"filename*=UTF-8''{filename_utf8_encoded}"
+        )
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
             headers={
-                "Content-Disposition": f'attachment; filename="{filename_ascii}"'
+                "Content-Disposition": content_disp
             }
         )
     except ImportError as e:

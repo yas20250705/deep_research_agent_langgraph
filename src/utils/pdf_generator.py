@@ -4,9 +4,9 @@ PDF生成ユーティリティ
 URLからPDFを生成する機能
 """
 
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Tuple, Any
 from io import BytesIO
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 import os
 import requests
 import logging
@@ -29,7 +29,15 @@ def _debug_log(msg: str, **kwargs) -> None:
 try:
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import (
+        SimpleDocTemplate,
+        Paragraph,
+        Spacer,
+        Image as PlatypusImage,
+        Table,
+        TableStyle,
+    )
     from reportlab.lib.enums import TA_LEFT, TA_JUSTIFY
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
@@ -291,6 +299,72 @@ def _fetch_url_content(url: str) -> Optional[str]:
         return None
 
 
+def _download_image(url: str) -> Optional[bytes]:
+    """画像URLからバイナリを取得（PDF用）"""
+    if not url or url.startswith("data:"):
+        return None
+    try:
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "image/webp,image/apng,image/*,*/*;q=0.8",
+        }
+        response = requests.get(url, timeout=15, headers=headers, allow_redirects=True)
+        response.raise_for_status()
+        ct = response.headers.get("Content-Type", "").lower()
+        if "image/" not in ct and "octet-stream" not in ct:
+            return None
+        return response.content
+    except Exception as e:
+        _debug_log("画像ダウンロード失敗", url=url, error=str(e))
+        return None
+
+
+def _extract_flowables_from_html(
+    html_content: str, base_url: str
+) -> List[Dict[str, Any]]:
+    """
+    HTMLからPDF用のフロー要素を document 順で抽出する。
+    見出し(h1-h6)・段落(p)・リスト(li)・画像・表をタグ名付きで返し、
+    PDFで元ページに近い文字サイズ・レイアウトを再現するために使う。
+    返却: [{'type': 'paragraph'|'image'|'table', 'text': '...', 'tag': 'h1'|'p'|'li'|...}, ...]
+    """
+    if not html_content or not BS4_AVAILABLE:
+        return []
+    try:
+        soup = BeautifulSoup(html_content, "html.parser")
+        for tag in soup.find_all(["script", "style"]):
+            tag.decompose()
+        container = soup.find("main") or soup.find("article") or soup.find("body")
+        if not container:
+            return []
+        block_tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6", "li", "img", "table"]
+        elements = container.find_all(block_tags)
+        result: List[Dict[str, Any]] = []
+        for el in elements:
+            if el.name == "img":
+                src = el.get("src")
+                if src:
+                    abs_url = urljoin(base_url, src)
+                    result.append({"type": "image", "url": abs_url})
+            elif el.name == "table":
+                result.append({"type": "table", "soup": el})
+            else:
+                text = el.get_text(separator="\n", strip=True)
+                if text and not el.find_parent("table"):
+                    list_parent = el.find_parent("ol") or el.find_parent("ul")
+                    list_kind = "ol" if el.find_parent("ol") else ("ul" if el.find_parent("ul") else None)
+                    result.append({
+                        "type": "paragraph",
+                        "text": text,
+                        "tag": el.name,
+                        "list_kind": list_kind,
+                    })
+        return result
+    except Exception as e:
+        logger.debug(f"HTML flowables 抽出失敗: {base_url}, エラー: {e}")
+        return []
+
+
 def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO:
     """
     参照ソースのURLからPDFを生成
@@ -329,21 +403,29 @@ def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO
     _debug_log("日本語フォント", font=japanese_font)
     
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=A4)
+    # 余白を広めにして読みやすく（約2cm = 約56pt）
+    margin_pt = 56
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=margin_pt,
+        rightMargin=margin_pt,
+        topMargin=margin_pt,
+        bottomMargin=margin_pt,
+    )
     story = []
     styles = getSampleStyleSheet()
     
-    # カスタムスタイル（日本語フォントを使用）
+    # メタ情報用スタイル
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
         fontName=japanese_font,
         fontSize=18,
         textColor=(0, 0, 0),
-        spaceAfter=30,
+        spaceAfter=24,
         alignment=TA_LEFT
     )
-    
     heading_style = ParagraphStyle(
         'CustomHeading',
         parent=styles['Heading2'],
@@ -354,7 +436,6 @@ def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO
         spaceBefore=12,
         alignment=TA_LEFT
     )
-    
     normal_style = ParagraphStyle(
         'CustomNormal',
         parent=styles['Normal'],
@@ -365,7 +446,6 @@ def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO
         alignment=TA_JUSTIFY,
         leading=14
     )
-    
     url_style = ParagraphStyle(
         'CustomURL',
         parent=styles['Normal'],
@@ -375,24 +455,84 @@ def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO
         spaceAfter=6,
         alignment=TA_LEFT
     )
-    
-    content_style = ParagraphStyle(
-        'CustomContent',
+    # 本文用：元ページに近い可読性（11pt・行間1.4程度）
+    body_style = ParagraphStyle(
+        'Body',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=11,
+        textColor=(0.15, 0.15, 0.15),
+        spaceAfter=8,
+        spaceBefore=0,
+        alignment=TA_JUSTIFY,
+        leading=15,
+    )
+    # 見出しスタイル（Webのh1〜h6に近いサイズ・間隔）
+    h1_style = ParagraphStyle(
+        'H1', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=22, textColor=(0, 0, 0), spaceBefore=18, spaceAfter=12,
+        alignment=TA_LEFT, leading=26,
+    )
+    h2_style = ParagraphStyle(
+        'H2', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=18, textColor=(0, 0, 0), spaceBefore=14, spaceAfter=10,
+        alignment=TA_LEFT, leading=22,
+    )
+    h3_style = ParagraphStyle(
+        'H3', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=16, textColor=(0.05, 0.05, 0.05), spaceBefore=12, spaceAfter=8,
+        alignment=TA_LEFT, leading=20,
+    )
+    h4_style = ParagraphStyle(
+        'H4', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=14, textColor=(0.1, 0.1, 0.1), spaceBefore=10, spaceAfter=6,
+        alignment=TA_LEFT, leading=18,
+    )
+    h5_style = ParagraphStyle(
+        'H5', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=12, textColor=(0.1, 0.1, 0.1), spaceBefore=8, spaceAfter=6,
+        alignment=TA_LEFT, leading=16,
+    )
+    h6_style = ParagraphStyle(
+        'H6', parent=styles['Normal'], fontName=japanese_font,
+        fontSize=11, textColor=(0.15, 0.15, 0.15), spaceBefore=6, spaceAfter=4,
+        alignment=TA_LEFT, leading=14,
+    )
+    list_style = ParagraphStyle(
+        'List',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=11,
+        textColor=(0.15, 0.15, 0.15),
+        leftIndent=22,
+        spaceAfter=4,
+        spaceBefore=2,
+        alignment=TA_LEFT,
+        leading=14,
+    )
+    table_cell_style = ParagraphStyle(
+        'TableCell',
         parent=styles['Normal'],
         fontName=japanese_font,
         fontSize=9,
-        textColor=(0, 0, 0),
-        spaceAfter=6,
-        alignment=TA_JUSTIFY,
-        leading=12
+        textColor=(0.15, 0.15, 0.15),
+        spaceAfter=2,
+        alignment=TA_LEFT,
+        leading=11,
     )
+    tag_to_style = {
+        "h1": h1_style, "h2": h2_style, "h3": h3_style,
+        "h4": h4_style, "h5": h5_style, "h6": h6_style,
+        "p": body_style, "li": list_style,
+    }
+    content_style = body_style
     
     def _p(s: str, style):
         """Paragraph に渡す文字列をフォントに応じてサニタイズ"""
         story.append(Paragraph(_safe_text_for_paragraph(s, japanese_font), style))
 
-    # タイトル
-    _p(f"<b>{theme} - 参照ソースページ内容</b>", title_style)
+    # 冒頭タイトル: query（テーマ）
+    _p(f"<b>{theme}</b>", title_style)
     story.append(Spacer(1, 12))
     _p(f"作成日時: {datetime.now().strftime('%Y年%m月%d日 %H:%M:%S')}", normal_style)
     story.append(Spacer(1, 20))
@@ -421,48 +561,150 @@ def generate_source_pdf(source: Dict, theme: str = "参照ソース") -> BytesIO
         summary_escaped = summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         _p(f"<b>要約:</b> {summary_escaped}", normal_style)
     
-    # ページ内容
+    # 関連性スコア・ソース（要約の後に表示）
+    if relevance_score is not None:
+        _p(f"<b>関連性スコア:</b> {relevance_score:.2f}", normal_style)
+    if source_type:
+        _p(f"<b>ソース:</b> {source_type}", normal_style)
+    
+    # ページ内容（テキスト・図・表を含む）：2行空行のあと、見出しは大きくボールド
+    page_content_heading_style = ParagraphStyle(
+        'PageContentHeading',
+        parent=styles['Normal'],
+        fontName=japanese_font,
+        fontSize=14,
+        textColor=(0, 0, 0),
+        spaceAfter=8,
+        spaceBefore=0,
+        alignment=TA_LEFT,
+        leading=18,
+    )
     if url != 'N/A' and not is_pdf_url:
-        story.append(Spacer(1, 6))
-        _p("<b>ページ内容:</b>", normal_style)
-        
-        page_content = _fetch_url_content(url)
-        if page_content:
-            _debug_log("ページ内容 取得成功（HTML→PDF）", url=url, content_len=len(page_content))
-            # HTMLエスケープ処理
-            page_content_escaped = page_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-            # 長すぎる場合は切り詰め（10000文字程度）
-            if len(page_content_escaped) > 10000:
-                page_content_escaped = page_content_escaped[:10000] + "\n\n... (内容が長いため一部を省略しています)"
-            # 段落ごとに分割して追加
-            paragraphs = page_content_escaped.split('\n\n')
-            for para in paragraphs[:50]:  # 最大50段落まで
-                if para.strip():
-                    _p(para.strip(), content_style)
-                    story.append(Spacer(1, 3))
-        else:
-            logger.warning(
-                f"日本語ウェブページのページ内容取得に失敗（PDFは要約のみで生成）: url={url}, title={title}"
-            )
-            _p("ページ内容の取得に失敗しました。", content_style)
-            if summary:
-                _p("以下はレポート生成時の要約です。", content_style)
-                story.append(Spacer(1, 3))
-                summary_escaped_fallback = summary.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
-                if len(summary_escaped_fallback) > 5000:
-                    summary_escaped_fallback = summary_escaped_fallback[:5000] + "..."
-                for para in summary_escaped_fallback.split('\n\n'):
+        story.append(Spacer(1, 12))
+        story.append(Spacer(1, 12))
+        _p("<b>ページ内容:</b>", page_content_heading_style)
+
+        html_content = _get_html_content(url) if SCRAPING_AVAILABLE else None
+        flowables = _extract_flowables_from_html(html_content, url) if html_content else []
+
+        if flowables:
+            _debug_log("ページ内容 取得成功（図・表含む）", url=url, flowables_count=len(flowables))
+            max_image_width = 500  # ポイント（A4余白を考慮）
+            flowable_count = 0
+            max_flowables = 80  # 段落・画像・表の合計上限
+
+            for item in flowables:
+                if flowable_count >= max_flowables:
+                    break
+                kind = item.get("type")
+                if kind == "paragraph":
+                    text = item.get("text", "").strip()
+                    if not text:
+                        continue
+                    tag = item.get("tag", "p")
+                    style = tag_to_style.get(tag, body_style)
+                    if tag == "li":
+                        list_kind = item.get("list_kind")
+                        bullet = "• " if list_kind == "ul" or not list_kind else "・ "
+                        text = bullet + text
+                    text_escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    if len(text_escaped) > 2000:
+                        text_escaped = text_escaped[:2000] + " ..."
+                    story.append(Paragraph(_safe_text_for_paragraph(text_escaped, japanese_font), style))
+                    flowable_count += 1
+                elif kind == "image":
+                    img_url = item.get("url", "")
+                    img_data = _download_image(img_url) if img_url else None
+                    if not img_data:
+                        continue
+                    try:
+                        buf = BytesIO(img_data)
+                        buf.seek(0)
+                        reader = ImageReader(buf)
+                        iw, ih = reader.getSize()
+                        if iw <= 0:
+                            continue
+                        scale = min(1.0, max_image_width / iw)
+                        w = max_image_width if scale < 1 else iw
+                        h = ih * scale
+                        buf.seek(0)
+                        img_flowable = PlatypusImage(buf, width=w, height=h)
+                        story.append(img_flowable)
+                        story.append(Spacer(1, 6))
+                        flowable_count += 1
+                    except Exception as e:
+                        _debug_log("画像PDF追加スキップ", url=img_url, error=str(e))
+                elif kind == "table":
+                    soup_table = item.get("soup")
+                    if not soup_table:
+                        continue
+                    rows_data = []
+                    for tr in soup_table.find_all("tr"):
+                        row = []
+                        for cell in tr.find_all(["td", "th"]):
+                            cell_text = cell.get_text(separator=" ", strip=True)
+                            cell_escaped = cell_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                            if len(cell_escaped) > 500:
+                                cell_escaped = cell_escaped[:500] + "..."
+                            row.append(
+                                Paragraph(
+                                    _safe_text_for_paragraph(cell_escaped, japanese_font),
+                                    table_cell_style,
+                                )
+                            )
+                        if row:
+                            rows_data.append(row)
+                    if rows_data:
+                        try:
+                            tbl = Table(rows_data)
+                            tbl.setStyle(
+                                TableStyle(
+                                    [
+                                        ("GRID", (0, 0), (-1, -1), 0.5, (0.4, 0.4, 0.4)),
+                                        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                                        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                                        ("TOPPADDING", (0, 0), (-1, -1), 4),
+                                        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                                    ]
+                                )
+                            )
+                            story.append(tbl)
+                            story.append(Spacer(1, 8))
+                            flowable_count += 1
+                        except Exception as e:
+                            _debug_log("表PDF追加スキップ", error=str(e))
+
+        if not flowables:
+            page_content = _fetch_url_content(url)
+            if page_content:
+                _debug_log("ページ内容 取得成功（テキストのみ）", url=url, content_len=len(page_content))
+                page_content_escaped = page_content.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                if len(page_content_escaped) > 10000:
+                    page_content_escaped = page_content_escaped[:10000] + "\n\n... (内容が長いため一部を省略しています)"
+                for para in page_content_escaped.split("\n\n")[:50]:
                     if para.strip():
                         _p(para.strip(), content_style)
                         story.append(Spacer(1, 3))
-    
-    # 関連性スコア
-    if relevance_score is not None:
-        _p(f"<b>関連性スコア:</b> {relevance_score:.2f}", normal_style)
-    
-    # ソースタイプ
-    if source_type:
-        _p(f"<b>ソース:</b> {source_type}", normal_style)
+            else:
+                logger.warning(
+                    f"日本語ウェブページのページ内容取得に失敗（PDFは要約のみで生成）: url={url}, title={title}"
+                )
+                _p("ページ内容の取得に失敗しました。", content_style)
+                if summary:
+                    _p("以下はレポート生成時の要約です。", content_style)
+                    story.append(Spacer(1, 3))
+                    summary_escaped_fallback = summary.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    if len(summary_escaped_fallback) > 5000:
+                        summary_escaped_fallback = summary_escaped_fallback[:5000] + "..."
+                    for para in summary_escaped_fallback.split("\n\n"):
+                        if para.strip():
+                            _p(para.strip(), content_style)
+                            story.append(Spacer(1, 3))
+        # ページ内容の後に区切り線
+        sep = Table([['']], colWidths=[doc.width], rowHeights=[8])
+        sep.setStyle(TableStyle([('LINEABOVE', (0, 0), (-1, 0), 0.8, (0.3, 0.3, 0.3))]))
+        story.append(sep)
     
     # PDFを生成（日本語ウェブページのPDF作成失敗をログに記録）
     try:

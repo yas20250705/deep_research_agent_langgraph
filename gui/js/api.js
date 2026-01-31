@@ -173,6 +173,23 @@ class API {
     }
 
     /**
+     * Content-Disposition ヘッダーからファイル名を取得（RFC 5987 filename*=UTF-8'' 対応）
+     */
+    _parseContentDispositionFilename(header) {
+        if (!header) return null;
+        const utf8Match = header.match(/filename\*=UTF-8''([^;\s]+)/i);
+        if (utf8Match && utf8Match[1]) {
+            try {
+                return decodeURIComponent(utf8Match[1].replace(/"/g, ''));
+            } catch (_) {
+                // ignore
+            }
+        }
+        const asciiMatch = header.match(/filename="([^"]*)"/);
+        return asciiMatch ? asciiMatch[1].trim() : null;
+    }
+
+    /**
      * 参照ソースからPDFを生成
      */
     async generateSourcePdf(source, theme = '参照ソース') {
@@ -195,7 +212,9 @@ class API {
             }
 
             const blob = await response.blob();
-            return { success: true, blob };
+            const contentDisposition = response.headers.get('Content-Disposition');
+            const filename = this._parseContentDispositionFilename(contentDisposition);
+            return { success: true, blob, filename };
         } catch (error) {
             return { success: false, error: error.message };
         }

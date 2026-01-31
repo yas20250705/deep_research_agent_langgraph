@@ -181,7 +181,7 @@ class UI {
         // 参照ソースセクションを追加（HTML形式）
         if (result.report && result.report.sources && result.report.sources.length > 0) {
             console.log('参照ソースを追加します:', result.report.sources.length, '件', result.report.sources);
-            this.addSourcesSection(contentEl, result.report.sources, researchId || 'default');
+            this.addSourcesSection(contentEl, result.report.sources, researchId || 'default', result.theme);
         } else {
             console.log('参照ソースが見つかりません:', {
                 hasReport: !!result.report,
@@ -420,8 +420,9 @@ class UI {
 
     /**
      * 参照ソースセクションを追加
+     * @param {string} [theme] - 人が入力した調査テーマ（query）。PDF冒頭タイトルに使用
      */
-    addSourcesSection(container, sources, researchId) {
+    addSourcesSection(container, sources, researchId, theme) {
         console.log('addSourcesSection called:', { sourcesCount: sources.length, researchId });
         
         const sourcesSection = document.createElement('div');
@@ -468,7 +469,7 @@ class UI {
         downloadBtn.textContent = '📥 選択したソースをダウンロード';
         downloadBtn.style.marginLeft = 'auto';
         downloadBtn.onclick = () => {
-            this.downloadSelectedSources(sources, researchId);
+            this.downloadSelectedSources(sources, researchId, theme);
         };
 
         buttonContainer.appendChild(selectAllBtn);
@@ -569,8 +570,9 @@ class UI {
 
     /**
      * 選択されたソースをダウンロード
+     * @param {string} [theme] - 人が入力した調査テーマ（query）。PDF冒頭タイトルに使用
      */
-    async downloadSelectedSources(sources, researchId) {
+    async downloadSelectedSources(sources, researchId, theme) {
         const selectedIndices = [];
         sources.forEach((_, index) => {
             const checkbox = document.getElementById(`source-checkbox-${researchId}-${index}`);
@@ -619,13 +621,15 @@ class UI {
                     // HTMLのURLの場合はPDFに変換
                     this.showNotification(`📄 PDFを生成中: ${source.title}...`, 'info');
                     
-                    const result = await api.generateSourcePdf(source, '参照ソース');
+                    const queryForPdf = theme || '参照ソース';
+                    const result = await api.generateSourcePdf(source, queryForPdf);
                     if (result.success && result.blob) {
                         const downloadUrl = URL.createObjectURL(result.blob);
                         const a = document.createElement('a');
                         a.href = downloadUrl;
-                        const safeTitle = source.title ? source.title.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 50) : 'source';
-                        a.download = `${safeTitle}_${new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19)}.pdf`;
+                        const safeTitle = source.title ? source.title.replace(/[\\/:*?"<>|]/g, '_').substring(0, 80) : 'source';
+                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+                        a.download = result.filename || `${safeTitle}_${timestamp}.pdf`;
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
