@@ -43,7 +43,7 @@ env.bak/
 venv.bak/
 
 # ============================================
-# IDE
+# IDE / Editor
 # ============================================
 .vscode/
 .idea/
@@ -61,6 +61,7 @@ venv.bak/
 .env.*.backup
 .env.*
 !.env_example
+!.env.example
 
 # ============================================
 # Logs
@@ -68,7 +69,6 @@ venv.bak/
 *.log
 logs/
 *.log.*
-*.log.*.*
 app.log
 error.log
 debug.log
@@ -79,28 +79,26 @@ debug.log
 .pytest_cache/
 .coverage
 .coverage.*
+.coverage.rc
 htmlcov/
 .tox/
 .hypothesis/
 test-results/
 .pytest/
 .nox/
-.pytest_cache/
-.coverage.rc
 
 # ============================================
-# MyPy
+# Type checking / Linting
 # ============================================
 .mypy_cache/
 .dmypy.json
 dmypy.json
 .mypy.ini.local
-
-# ============================================
-# Type checking
-# ============================================
 .pytype/
 .pyre/
+.ruff_cache/
+.pylint.d/
+.flake8
 
 # ============================================
 # Redis
@@ -122,6 +120,8 @@ Thumbs.db
 .fuse_hidden*
 .directory
 .Trash-*
+._*
+.nfs*
 
 # ============================================
 # Streamlit
@@ -136,12 +136,15 @@ Thumbs.db
 # ============================================
 # Jupyter Notebook
 # ============================================
-.ipynb_checkpoints
+.ipynb_checkpoints/
 *.ipynb_checkpoints/
 
 # ============================================
 # Project specific - Deep Research Agent LangGraph
 # ============================================
+# Spec / design documents
+spec_doc/
+
 # Checkpoints
 checkpoints/
 langgraph_checkpoints/
@@ -171,15 +174,10 @@ report_*.txt
 *.dump
 pgdata/
 
-# ============================================
 # PDF files (generated/downloaded)
-# ============================================
-# Generated PDF files in output directory
 output/*.pdf
-# Temporary PDF files
 *.pdf.tmp
 *.pdf.temp
-# Downloaded PDF files (user-specific)
 downloads/*.pdf
 temp_pdf_*.pdf
 
@@ -200,6 +198,10 @@ temp_pdf_*.pdf
 *.swp
 *.swo
 *.old
+.env_old
+*.backup
+*_backup
+*_old
 
 # ============================================
 # API keys and secrets
@@ -218,11 +220,10 @@ credentials.json
 # ============================================
 .cache/
 *.cache
-.cache/**
 __cache__/
 
 # ============================================
-# FastAPI/API
+# FastAPI / Uvicorn
 # ============================================
 *.pid
 *.sock
@@ -237,67 +238,21 @@ settings_local.py
 config_local.py
 
 # ============================================
-# LangGraph specific
+# LangGraph / LangSmith
 # ============================================
 langgraph_*.json
 .langsmith/
-.langsmith/**
 langsmith_*.json
 
 # ============================================
-# Windows specific
-# ============================================
-*.lnk
-*.exe
-*.msi
-*.bat.bak
-Desktop.ini
-desktop.ini
-$RECYCLE.BIN/
-ehthumbs.db
-Thumbs.db
-
-# ============================================
-# MacOS specific
-# ============================================
-.AppleDouble
-.LSOverride
-Icon
-._*
-
-# ============================================
-# Linux specific
-# ============================================
-.fuse_hidden*
-.directory
-.Trash-*
-.nfs*
-
-# ============================================
-# Profiling
+# Profiling / Coverage reports
 # ============================================
 *.prof
 *.lprof
 *.pstats
-
-# ============================================
-# Coverage reports
-# ============================================
 coverage.xml
 *.cover
-.coverage.rc
-.coverage.*
 htmlcov/
-
-# ============================================
-# Additional Python tools
-# ============================================
-.ruff_cache/
-.pylint.d/
-.flake8
-.mypy_cache/
-.pytype/
-.pyre/
 
 # ============================================
 # Node.js (if any tools use it)
@@ -310,48 +265,29 @@ package-lock.json
 yarn.lock
 
 # ============================================
-# Docker (if used)
+# Docker
 # ============================================
 docker-compose.override.yml
 .dockerignore.local
 .docker/
 
 # ============================================
-# Additional backup files
+# Project-specific temporary / state files
 # ============================================
-.env_old
-*.old
-*.backup
-*.bak
-*_backup
-*_old
-
-# ============================================
-# Project-specific temporary files
-# ============================================
-# Copy files (e.g., example_usage copy.py)
-* copy.*
-* copy
-*_copy.*
-
-# Session state files
 *.session
 *.state
 session_*.json
 state_*.json
-
-# Temporary research data
 temp_research_*.json
 temp_*.json
 *.temp.json
-
-# Generated titles cache
 title_cache.json
 *.title_cache
 
 # ============================================
-# Keep important directories (optional)
+# Windows specific
 # ============================================
-# Uncomment if you want to keep empty directories
-# !output/.gitkeep
-# !checkpoints/.gitkeep
+*.lnk
+*.exe
+*.msi
+*.bat.bak
