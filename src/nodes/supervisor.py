@@ -80,7 +80,21 @@ def generate_research_plan(
     human_input = (state.get("human_input") or "").strip()
     if human_input and len(human_input) > 2000:
         human_input = human_input[:2000] + "..."
-    human_msg = f"テーマ: {theme}"
+
+    # 同一チャット内の既存レポートが含まれる場合は、調査テーマと既存レポートを明示セクションで分け、LLMが確実に参照するようにする
+    marker = "【同一チャット内の既存調査レポート"
+    if marker in theme:
+        parts = theme.split(marker, 1)
+        main_theme = (parts[0] or "").strip()
+        # parts[1] は "（考慮し...）】\n" + 既存レポート本文
+        reports_block = (parts[1] or "").strip()
+        end_bracket = "）】"
+        if end_bracket in reports_block:
+            reports_block = reports_block.split(end_bracket, 1)[-1].strip()
+        human_msg = "## 調査テーマ（今回のテーマのみ記載すること）\n" + main_theme
+        human_msg += "\n\n## 同一チャット内の既存調査レポート（必ず参照し、既存の観点を活用・深掘り・補足すること）\n" + reports_block
+    else:
+        human_msg = f"テーマ: {theme}"
     if human_input:
         human_msg += f"\n\nユーザーからの追加指示（テーマの絞り込み・強調したい点・避けたい表現など）:\n{human_input}"
 

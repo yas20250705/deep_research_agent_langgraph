@@ -107,7 +107,8 @@ async def create_research(
             theme=request.theme,
             max_iterations=request.max_iterations,
             enable_human_intervention=request.enable_human_intervention,
-            checkpointer_type=request.checkpointer_type
+            checkpointer_type=request.checkpointer_type,
+            previous_reports_context=request.previous_reports_context
         )
         
         # 推定完了時刻（簡易計算: 1イテレーションあたり30秒）

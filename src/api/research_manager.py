@@ -95,7 +95,8 @@ class ResearchManager:
         theme: str,
         max_iterations: int = 5,
         enable_human_intervention: bool = False,
-        checkpointer_type: str = "memory"
+        checkpointer_type: str = "memory",
+        previous_reports_context: Optional[str] = None
     ) -> str:
         """
         リサーチを作成して開始
@@ -105,6 +106,7 @@ class ResearchManager:
             max_iterations: 最大イテレーション数
             enable_human_intervention: 人間介入を有効化するか
             checkpointer_type: チェックポイントタイプ
+            previous_reports_context: 同一チャット内の既存調査レポート（考慮して計画を作成する場合）
         
         Returns:
             リサーチID
@@ -130,9 +132,18 @@ class ResearchManager:
             }
         }
         
+        # 初期メッセージ: テーマ + 同一チャット内の既存レポート（あれば）
+        first_message_content = theme
+        if previous_reports_context and previous_reports_context.strip():
+            first_message_content = (
+                theme
+                + "\n\n【同一チャット内の既存調査レポート（考慮し、重複を避けつつ発展させる形で調査計画を作成すること）】\n"
+                + previous_reports_context.strip()
+            )
+        
         # 初期ステート作成（人間介入の有無にかかわらず共通）
         initial_state: ResearchState = {
-            "messages": [HumanMessage(content=theme)],
+            "messages": [HumanMessage(content=first_message_content)],
             "task_plan": None,
             "research_data": [],
             "current_draft": None,

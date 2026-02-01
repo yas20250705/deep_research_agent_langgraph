@@ -418,6 +418,18 @@ body {
     /* target="_blank"はJavaScriptで設定 */
 }
 
+/* 同一チャット内の複数調査結果ブロック（各結果を視覚的に区切る） */
+.message.assistant.research-result-block {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 2px solid var(--border-color);
+}
+.message.assistant.research-result-block:first-of-type {
+    margin-top: 0;
+    padding-top: 0;
+    border-top: none;
+}
+
 /* リサーチ結果（チャット形式に統合されたため、一部のスタイルは残す） */
 .progress-container {
     margin: 1rem 0;

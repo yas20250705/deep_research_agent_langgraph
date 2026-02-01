@@ -6,11 +6,22 @@
 class App {
     constructor() {
         this.currentResearchId = null;
+        this.currentChatId = null;
         this.monitoringInterval = null;
         this.messages = [];
-        this.researchHistory = [];
-        
+        /** チャット単位の履歴（同一チャット内の複数調査を1つにまとめる） */
+        this.chatHistory = [];
+        /** 同一チャット内の完了した調査レポート。新規テーマ入力時に計画で考慮する（直近3件は全文、4件目以降は要約で含める） */
+        this.previousReportsInChat = [];
+        this.PREVIOUS_REPORTS_STORAGE_KEY = 'research_previousReportsInChat';
+        this.CHAT_HISTORY_STORAGE_KEY = 'research_chatHistory';
+
         this.init();
+    }
+
+    /** 簡単なUUID生成 */
+    _generateChatId() {
+        return 'chat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
     }
 
     /**
@@ -22,6 +33,9 @@ class App {
         
         // 履歴の読み込み（localStorage）
         this.loadHistory();
+
+        // 同一チャット内の既存レポートを復元（sessionStorage・リロード後も計画で考慮するため）
+        this.loadPreviousReportsInChat();
         
         // イベントリスナーの設定
         this.setupEventListeners();
@@ -38,39 +52,73 @@ class App {
 
     /**
      * サーバーの永続化履歴と同期（API再起動後も履歴が見えるようにする）
+     * サーバー取得成功時はサーバー一覧を信頼できる情報源として履歴を上書きする。
      * @param {number} retryCount - リトライ回数（サーバー起動直後の失敗時用）
      */
     async syncHistoryFromServer(retryCount = 0) {
-        const maxRetry = 3;
+        const maxRetry = 5;
         const retryDelayMs = 2000;
         const result = await api.getResearchHistory();
-        if (result.success && result.items && result.items.length > 0) {
-            const ids = new Set(this.researchHistory.map(r => r.research_id));
-            let added = 0;
-            for (const item of result.items) {
-                if (ids.has(item.research_id)) continue;
-                this.researchHistory.unshift({
-                    research_id: item.research_id,
-                    theme: item.theme || '',
-                    title: item.theme || '無題のリサーチ',
-                    status: item.status || 'completed',
+        if (result.success && result.items) {
+            const serverItems = result.items.slice(0, 50);
+            const serverIds = new Set(serverItems.map((i) => i.research_id));
+
+            const updatedChats = this.chatHistory.map((chat) => ({
+                ...chat,
+                researches: (chat.researches || []).filter((r) => serverIds.has(r.research_id))
+            })).filter((chat) => chat.researches.length > 0);
+
+            const usedIds = new Set(updatedChats.flatMap((c) => c.researches.map((r) => r.research_id)));
+            for (const item of serverItems) {
+                if (usedIds.has(item.research_id)) continue;
+                updatedChats.push({
+                    chatId: this._generateChatId(),
+                    researches: [{
+                        research_id: item.research_id,
+                        theme: item.theme || '',
+                        status: item.status || 'completed',
+                        created_at: item.created_at
+                    }],
                     created_at: item.created_at
                 });
-                ids.add(item.research_id);
-                added++;
+                usedIds.add(item.research_id);
             }
-            if (added > 0) {
-                if (this.researchHistory.length > 50) {
-                    this.researchHistory = this.researchHistory.slice(0, 50);
-                }
-                this.saveHistory();
-                this.renderHistory();
-            }
+            updatedChats.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+            this.chatHistory = updatedChats.slice(0, 50);
+            this.saveChatHistory();
+            this.renderHistory();
             return;
         }
-        // サーバー未起動などで取得失敗時、履歴が空ならリトライ（API再起動直後に対応）
-        if (retryCount < maxRetry && this.researchHistory.length === 0) {
+        if (retryCount < maxRetry && this.chatHistory.length === 0) {
             setTimeout(() => this.syncHistoryFromServer(retryCount + 1), retryDelayMs);
+        }
+    }
+
+    /**
+     * 同一チャット内の既存レポートを sessionStorage から復元（リロード後も過去レポート考慮で計画するため）
+     */
+    loadPreviousReportsInChat() {
+        try {
+            const raw = sessionStorage.getItem(this.PREVIOUS_REPORTS_STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    this.previousReportsInChat = parsed;
+                }
+            }
+        } catch (e) {
+            console.warn('previousReportsInChat の復元に失敗しました', e);
+        }
+    }
+
+    /**
+     * 同一チャット内の既存レポートを sessionStorage に保存
+     */
+    savePreviousReportsInChat() {
+        try {
+            sessionStorage.setItem(this.PREVIOUS_REPORTS_STORAGE_KEY, JSON.stringify(this.previousReportsInChat));
+        } catch (e) {
+            console.warn('previousReportsInChat の保存に失敗しました', e);
         }
     }
 
@@ -112,30 +160,43 @@ class App {
     }
 
     /**
-     * 履歴の読み込み
+     * 履歴の読み込み（旧形式 researchHistory から chatHistory へ移行）
      */
     loadHistory() {
-        const savedHistory = localStorage.getItem('researchHistory');
-        if (savedHistory) {
+        const savedChat = localStorage.getItem(this.CHAT_HISTORY_STORAGE_KEY);
+        if (savedChat) {
             try {
-                this.researchHistory = JSON.parse(savedHistory);
+                this.chatHistory = JSON.parse(savedChat);
+                this.renderHistory();
+                return;
+            } catch (e) {
+                console.warn('chatHistory の読み込みに失敗:', e);
+            }
+        }
+        const savedLegacy = localStorage.getItem('researchHistory');
+        if (savedLegacy) {
+            try {
+                const legacy = JSON.parse(savedLegacy);
+                this.chatHistory = (Array.isArray(legacy) ? legacy : []).map((r) => ({
+                    chatId: this._generateChatId(),
+                    researches: [{ research_id: r.research_id, theme: r.theme || '', status: r.status || 'completed', created_at: r.created_at }],
+                    created_at: r.created_at
+                }));
+                this.saveChatHistory();
                 this.renderHistory();
             } catch (e) {
-                console.error('履歴の読み込みに失敗しました:', e);
-                this.researchHistory = [];
+                console.error('履歴の移行に失敗しました:', e);
+                this.chatHistory = [];
             }
         }
     }
 
-    /**
-     * 履歴の保存
-     */
-    saveHistory() {
-        localStorage.setItem('researchHistory', JSON.stringify(this.researchHistory));
+    saveChatHistory() {
+        localStorage.setItem(this.CHAT_HISTORY_STORAGE_KEY, JSON.stringify(this.chatHistory));
     }
 
     /**
-     * 履歴の表示（最大10件の高さで表示、超過分はスクロール＋スクロールボタン）
+     * 履歴の表示（チャット単位、同一チャット内の複数調査を1件として表示）
      */
     renderHistory() {
         const historyListEl = document.getElementById('historyList');
@@ -143,25 +204,31 @@ class App {
         historyListEl.innerHTML = '';
 
         if (countEl) {
-            countEl.textContent = this.researchHistory.length > 0 ? `（${this.researchHistory.length}件）` : '';
+            countEl.textContent = this.chatHistory.length > 0 ? `（${this.chatHistory.length}件）` : '';
         }
 
-        if (this.researchHistory.length === 0) {
+        if (this.chatHistory.length === 0) {
             historyListEl.innerHTML = '<div style="color: var(--text-secondary); font-size: 0.85rem;">履歴がありません</div>';
             return;
         }
 
-        this.researchHistory.forEach((research) => {
+        this.chatHistory.forEach((chat) => {
+            const researches = chat.researches || [];
+            const first = researches[0];
+            const theme = (first && first.theme) ? first.theme : '無題のリサーチ';
+            const title = theme.length > 50 ? theme.substring(0, 50) + '...' : theme;
+            const subtitle = researches.length > 1 ? `（${researches.length}件の調査）` : '';
+
             const item = document.createElement('div');
             item.className = 'history-item';
-            item.dataset.researchId = research.research_id;
-            if (research.research_id === this.currentResearchId) {
+            item.dataset.chatId = chat.chatId;
+            if (chat.chatId === this.currentChatId) {
                 item.classList.add('active');
             }
 
-            const title = document.createElement('div');
-            title.className = 'history-item-title';
-            title.textContent = research.title || research.theme || '無題のリサーチ';
+            const titleEl = document.createElement('div');
+            titleEl.className = 'history-item-title';
+            titleEl.textContent = title + subtitle;
 
             const deleteBtn = document.createElement('button');
             deleteBtn.className = 'history-item-delete';
@@ -169,60 +236,72 @@ class App {
             deleteBtn.textContent = '🗑️';
             deleteBtn.setAttribute('aria-label', '削除');
 
-            item.appendChild(title);
+            item.appendChild(titleEl);
             item.appendChild(deleteBtn);
             historyListEl.appendChild(item);
         });
     }
 
     /**
-     * 履歴からリサーチを読み込み
+     * 履歴からチャットを読み込み（同一チャット内の全調査を順に表示）
      */
-    async loadResearchFromHistory(researchId) {
-        this.currentResearchId = researchId;
-        this.renderHistory();
-
-        // 結果を取得
-        const result = await api.getResearch(researchId);
-        if (result.success && result.data) {
-            ui.clearMessages();
-            
-            // メッセージを再表示
-            const research = this.researchHistory.find(r => r.research_id === researchId);
-            if (research) {
-                ui.addMessage('user', research.theme);
-            }
-
-            // 結果をチャット形式で表示（調査クエリを最上部に表示するようスクロール）
-            ui.displayResearchResult(result.data, researchId, { scrollTo: 'top' });
-        } else {
-            const message = result.notFound
-                ? 'このリサーチは見つかりません。サーバー再起動後は、完了したリサーチのみ参照できます。'
-                : (result.error || 'リサーチ結果の取得に失敗しました');
-            ui.showNotification(message, 'error');
+    async loadResearchFromHistory(chatId) {
+        const chat = this.chatHistory.find((c) => c.chatId === chatId);
+        if (!chat || !chat.researches || chat.researches.length === 0) {
+            ui.showNotification('チャットが見つかりません', 'error');
+            return;
         }
+        const sorted = [...chat.researches].sort((a, b) => new Date(a.created_at || 0) - new Date(b.created_at || 0));
+
+        this.currentChatId = chatId;
+        this.currentResearchId = sorted[sorted.length - 1]?.research_id || null;
+        this.previousReportsInChat = [];
+        this.renderHistory();
+        ui.clearMessages();
+
+        for (let i = 0; i < sorted.length; i++) {
+            const r = sorted[i];
+            ui.addMessage('user', r.theme || '（無題）');
+            const result = await api.getResearch(r.research_id);
+            if (result.success && result.data) {
+                ui.displayResearchResult(result.data, r.research_id, i === 0 ? { scrollTo: 'top' } : {});
+                const draft = (result.data.report && result.data.report.draft) ? result.data.report.draft : '';
+                const plan = result.data.plan || {};
+                const investigationPoints = Array.isArray(plan.investigation_points) ? plan.investigation_points : [];
+                if (result.data.theme || draft) {
+                    this.previousReportsInChat.push({
+                        theme: result.data.theme || '（無題）',
+                        draft: typeof draft === 'string' ? draft : String(draft),
+                        investigation_points: investigationPoints
+                    });
+                }
+            } else {
+                ui.addMessage('assistant', `❌ リサーチの読み込みに失敗しました: ${r.research_id}`);
+            }
+        }
+        this.savePreviousReportsInChat();
     }
 
     /**
      * 履歴からリサーチを削除
      */
-    async deleteResearchFromHistory(researchId) {
-        if (confirm('このリサーチを削除しますか？')) {
-            // APIからも削除
-            await api.deleteResearch(researchId);
+    async deleteResearchFromHistory(chatId) {
+        const chat = this.chatHistory.find((c) => c.chatId === chatId);
+        if (!chat || !confirm('このチャットを削除しますか？（含まれる調査がすべて削除されます）')) return;
 
-            // 履歴から削除
-            this.researchHistory = this.researchHistory.filter(r => r.research_id !== researchId);
-            this.saveHistory();
-            this.renderHistory();
-
-            if (this.currentResearchId === researchId) {
-                this.currentResearchId = null;
-                ui.clearResults();
-            }
-
-            ui.showNotification('リサーチを削除しました', 'success');
+        for (const r of chat.researches || []) {
+            await api.deleteResearch(r.research_id);
         }
+        this.chatHistory = this.chatHistory.filter((c) => c.chatId !== chatId);
+        this.saveChatHistory();
+        this.renderHistory();
+
+        if (this.currentChatId === chatId) {
+            this.currentChatId = null;
+            this.currentResearchId = null;
+            ui.clearResults();
+        }
+        ui.showNotification('チャットを削除しました', 'success');
     }
 
     /**
@@ -283,13 +362,13 @@ class App {
             historyListEl.addEventListener('click', (e) => {
                 const item = e.target.closest('.history-item');
                 if (!item) return;
-                const researchId = item.dataset.researchId;
-                if (!researchId) return;
+                const chatId = item.dataset.chatId;
+                if (!chatId) return;
                 if (e.target.closest('.history-item-delete')) {
-                    this.deleteResearchFromHistory(researchId);
+                    this.deleteResearchFromHistory(chatId);
                     return;
                 }
-                this.loadResearchFromHistory(researchId);
+                this.loadResearchFromHistory(chatId);
             });
         }
     }
@@ -299,7 +378,12 @@ class App {
      */
     newChat() {
         this.currentResearchId = null;
+        this.currentChatId = null;
         this.messages = [];
+        this.previousReportsInChat = [];
+        try {
+            sessionStorage.removeItem(this.PREVIOUS_REPORTS_STORAGE_KEY);
+        } catch (e) {}
         ui.clearMessages();
         ui.clearResults();
         this.renderHistory();
@@ -331,29 +415,73 @@ class App {
         const maxIterations = parseInt(document.getElementById('maxIterations').value);
         const enableHumanIntervention = document.getElementById('enableHumanIntervention').checked;
 
-        const result = await api.createResearch(theme, maxIterations, enableHumanIntervention);
+        // 同一チャット内の既存レポートを考慮して計画を作成するため渡す（観点・直近3件全文・4件目以降要約）
+        const MAX_FULL_REPORTS = 3;
+        const MAX_DRAFT_LEN = 3000;
+        const MAX_SUMMARY_LEN = 600;
+        let previousReportsContext = null;
+        if (this.previousReportsInChat.length > 0) {
+            const full = this.previousReportsInChat.slice(0, MAX_FULL_REPORTS).map(r => {
+                const points = Array.isArray(r.investigation_points) && r.investigation_points.length > 0
+                    ? r.investigation_points.map(p => `  - ${p}`).join('\n')
+                    : '  （観点情報なし）';
+                const draftExcerpt = (r.draft || '').length > MAX_DRAFT_LEN
+                    ? (r.draft || '').substring(0, MAX_DRAFT_LEN) + '\n...(省略)'
+                    : (r.draft || '');
+                return `--- 既存レポート ---\nテーマ: ${r.theme}\n調査観点:\n${points}\n\nレポート本文:\n${draftExcerpt}`;
+            });
+            const overflow = this.previousReportsInChat.slice(MAX_FULL_REPORTS);
+            const overflowSummary = overflow.length > 0
+                ? '\n\n--- その他の既存レポート（要約） ---\n' + overflow.map(r => {
+                    const points = Array.isArray(r.investigation_points) && r.investigation_points.length > 0
+                        ? r.investigation_points.join('、')
+                        : '（観点情報なし）';
+                    const summary = (r.draft || '').length > MAX_SUMMARY_LEN
+                        ? (r.draft || '').substring(0, MAX_SUMMARY_LEN) + '...(省略)'
+                        : (r.draft || '');
+                    return `テーマ: ${r.theme}\n観点: ${points}\n要約: ${summary}`;
+                }).join('\n\n')
+                : '';
+            previousReportsContext = full.join('\n\n') + overflowSummary;
+        }
+
+        const result = await api.createResearch(theme, maxIterations, enableHumanIntervention, previousReportsContext);
 
         if (result.success) {
             this.currentResearchId = result.data.research_id;
-            
-            // 履歴に追加
             const researchInfo = {
                 research_id: result.data.research_id,
                 theme: theme,
                 status: 'started',
-                title: theme.length > 50 ? theme.substring(0, 50) + '...' : theme,
                 created_at: new Date().toISOString()
             };
-            this.researchHistory.unshift(researchInfo);
-            // 最大50件まで保持
-            if (this.researchHistory.length > 50) {
-                this.researchHistory = this.researchHistory.slice(0, 50);
+            if (this.currentChatId) {
+                const chat = this.chatHistory.find((c) => c.chatId === this.currentChatId);
+                if (chat) {
+                    chat.researches = chat.researches || [];
+                    chat.researches.push(researchInfo);
+                } else {
+                    this.currentChatId = null;
+                }
             }
-            this.saveHistory();
+            if (!this.currentChatId) {
+                const chatId = this._generateChatId();
+                this.chatHistory.unshift({
+                    chatId,
+                    researches: [researchInfo],
+                    created_at: researchInfo.created_at
+                });
+                this.currentChatId = chatId;
+            }
+            if (this.chatHistory.length > 50) {
+                this.chatHistory = this.chatHistory.slice(0, 50);
+            }
+            this.saveChatHistory();
             this.renderHistory();
 
-            // 「リサーチを開始しています...」メッセージを更新
-            const messages = ui.chatMessagesEl.querySelectorAll('.message.assistant');
+            // 「リサーチを開始しています...」メッセージを更新（進捗コンテナは除外し、最後の通常アシスタントメッセージのみ更新）
+            const messages = Array.from(ui.chatMessagesEl.querySelectorAll('.message.assistant'))
+                .filter((el) => el.id !== 'progressMessageContainer');
             if (messages.length > 0) {
                 const lastMessage = messages[messages.length - 1];
                 const contentEl = lastMessage.querySelector('.message-content');
@@ -367,11 +495,11 @@ class App {
             this.startMonitoring(result.data.research_id);
         } else {
             ui.showLoading(false);
-            // 最後のアシスタントメッセージ（「リサーチを開始しています...」）を削除
-            const messages = ui.chatMessagesEl.querySelectorAll('.message.assistant');
+            // 最後のアシスタントメッセージ（「リサーチを開始しています...」）を削除（進捗コンテナは除外）
+            const messages = Array.from(ui.chatMessagesEl.querySelectorAll('.message.assistant'))
+                .filter((el) => el.id !== 'progressMessageContainer');
             if (messages.length > 0) {
                 const lastMessage = messages[messages.length - 1];
-                // 「リサーチを開始しています...」というメッセージのみ削除
                 const content = lastMessage.querySelector('.message-content');
                 if (content && content.textContent.includes('リサーチを開始しています')) {
                     lastMessage.remove();
@@ -426,12 +554,33 @@ class App {
                         // チャット形式で結果を表示
                         ui.displayResearchResult(result.data, researchId);
                         
+                        // 同一チャット内の既存レポートとして蓄積（観点を含め、計画に渡す）
+                        const draft = (result.data.report && result.data.report.draft) ? result.data.report.draft : '';
+                        const plan = result.data.plan || {};
+                        const investigationPoints = Array.isArray(plan.investigation_points) ? plan.investigation_points : [];
+                        if (result.data.theme || draft) {
+                            this.previousReportsInChat.unshift({
+                                theme: result.data.theme || '（無題）',
+                                draft: typeof draft === 'string' ? draft : String(draft),
+                                investigation_points: investigationPoints
+                            });
+                            // コンテキスト長を抑えるため最大20件まで保持（4件目以降は要約で含める）
+                            const MAX_PREVIOUS_REPORTS = 20;
+                            if (this.previousReportsInChat.length > MAX_PREVIOUS_REPORTS) {
+                                this.previousReportsInChat = this.previousReportsInChat.slice(0, MAX_PREVIOUS_REPORTS);
+                            }
+                            this.savePreviousReportsInChat();
+                        }
+                        
                         // 履歴を更新
-                        const research = this.researchHistory.find(r => r.research_id === researchId);
-                        if (research) {
-                            research.status = 'completed';
-                            this.saveHistory();
-                            this.renderHistory();
+                        for (const chat of this.chatHistory) {
+                            const r = (chat.researches || []).find((x) => x.research_id === researchId);
+                            if (r) {
+                                r.status = 'completed';
+                                this.saveChatHistory();
+                                this.renderHistory();
+                                break;
+                            }
                         }
 
                         ui.showNotification('リサーチが完了しました！', 'success');
@@ -503,13 +652,20 @@ class App {
      * リサーチを再生成
      */
     async regenerateResearch(researchId) {
-        const research = this.researchHistory.find(r => r.research_id === researchId);
+        let research = null;
+        let parentChat = null;
+        for (const chat of this.chatHistory) {
+            research = (chat.researches || []).find((r) => r.research_id === researchId);
+            if (research) {
+                parentChat = chat;
+                break;
+            }
+        }
         if (!research) {
             ui.showNotification('リサーチが見つかりません', 'error');
             return;
         }
 
-        // 新しいリサーチを開始
         const theme = research.theme;
         const maxIterations = parseInt(document.getElementById('maxIterations').value);
         const enableHumanIntervention = document.getElementById('enableHumanIntervention').checked;
@@ -522,12 +678,28 @@ class App {
 
         if (result.success) {
             this.currentResearchId = result.data.research_id;
+            const newInfo = { research_id: result.data.research_id, theme, status: 'started', created_at: new Date().toISOString() };
+            if (parentChat) {
+                parentChat.researches = parentChat.researches || [];
+                parentChat.researches.push(newInfo);
+                this.currentChatId = parentChat.chatId;
+            } else {
+                const chatId = this._generateChatId();
+                this.chatHistory.unshift({ chatId, researches: [newInfo], created_at: newInfo.created_at });
+                this.currentChatId = chatId;
+            }
+            this.saveChatHistory();
+            this.renderHistory();
             this.startMonitoring(result.data.research_id);
         } else {
             ui.showLoading(false);
-            const messages = ui.chatMessagesEl.querySelectorAll('.message.assistant');
+            const messages = Array.from(ui.chatMessagesEl.querySelectorAll('.message.assistant'))
+                .filter((el) => el.id !== 'progressMessageContainer');
             if (messages.length > 0) {
-                messages[messages.length - 1].remove();
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg && lastMsg.textContent && lastMsg.textContent.includes('リサーチを再生成しています')) {
+                    lastMsg.remove();
+                }
             }
             ui.addMessage('assistant', `❌ リサーチの再生成に失敗しました: ${result.error}`);
             ui.showNotification(`エラー: ${result.error}`, 'error');
@@ -548,13 +720,17 @@ class App {
                 ui.clearProgress();
                 ui.showNotification('リサーチを停止しました', 'success');
                 
-                // 履歴から削除
-                this.researchHistory = this.researchHistory.filter(r => r.research_id !== researchId);
-                this.saveHistory();
+                // 履歴から削除（該当リサーチをチャット内から除去、チャットが空になったらチャットごと削除）
+                for (const chat of this.chatHistory) {
+                    chat.researches = (chat.researches || []).filter((r) => r.research_id !== researchId);
+                }
+                this.chatHistory = this.chatHistory.filter((c) => (c.researches || []).length > 0);
+                this.saveChatHistory();
                 this.renderHistory();
-                
-                if (this.currentResearchId === researchId) {
-                    this.currentResearchId = null;
+
+                if (this.currentResearchId === researchId) this.currentResearchId = null;
+                if (this.currentChatId && !this.chatHistory.some((c) => c.chatId === this.currentChatId)) {
+                    this.currentChatId = null;
                 }
             } else {
                 ui.showLoading(false);

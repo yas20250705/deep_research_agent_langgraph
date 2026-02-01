@@ -29,6 +29,10 @@ class ResearchRequest(BaseModel):
         description="チェックポイントタイプ",
         pattern="^(memory|redis)$"
     )
+    previous_reports_context: Optional[str] = Field(
+        default=None,
+        description="同一チャット内の既存調査レポート（テーマ・レポート本文の要約）。考慮して計画を作成する場合に渡す"
+    )
     
     model_config = {
         "json_schema_extra": {

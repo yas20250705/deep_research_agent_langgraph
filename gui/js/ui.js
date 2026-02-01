@@ -97,11 +97,16 @@ class UI {
     }
 
     /**
-     * リサーチ結果をチャット形式で表示
+     * リサーチ結果をチャット形式で表示（同一チャット内で複数回調査した場合も履歴として追加し、既存の結果は残す）
      * @param {Object} options - { scrollTo: 'top' | 'bottom' } 履歴から表示時は 'top' で調査クエリを最上部に
      */
     displayResearchResult(result, researchId, options = {}) {
         let content = '';
+
+        // 各調査結果を識別するための見出し（複数結果が並んでもどれがどのテーマか分かるようにする）
+        const themeLabel = (result.theme && result.theme.trim()) ? result.theme.trim() : '（無題）';
+        const shortTheme = themeLabel.length > 60 ? themeLabel.substring(0, 60) + '...' : themeLabel;
+        content += `## 📋 調査結果: ${shortTheme}\n\n`;
 
         // 統計情報
         if (result.statistics) {
@@ -131,12 +136,13 @@ class UI {
         // 参照ソース（HTML形式で直接生成）
         // 参照ソースセクションは後でHTMLで追加するため、ここではスキップ
 
-        // 進捗メッセージを削除してから結果を表示
+        // 進捗メッセージを削除してから結果を表示（既存の結果ブロックは削除せず、常に末尾に追加）
         this.clearProgress();
         
-        // 新しいメッセージとして追加
+        // 新しいメッセージとして追加（同一チャット内の複数調査結果をすべて残すため、常に append）
         const messageEl = document.createElement('div');
-        messageEl.className = 'message assistant';
+        messageEl.className = 'message assistant research-result-block';
+        messageEl.dataset.researchId = researchId || '';
 
         const contentEl = document.createElement('div');
         contentEl.className = 'message-content';
@@ -298,44 +304,27 @@ class UI {
             };
             const nextLabel = nextLabels[interruptedState.next_node] || `次: ${interruptedState.next_node || '不明'}`;
             contextHtml += `<div style="margin-bottom: 1rem; padding: 0.75rem; background: #e8f4f8; border-radius: 6px; font-size: 0.9rem;"><strong>${nextLabel}</strong></div>`;
-            // 調査計画（常に表示・開いた状態。データがなければ「なし」）
+            // 調査計画のみ表示（収集ソース・ドラフト・フィードバックは表示しない）。観点は項目ごとに縦リストで表示。
             const plan = interruptedState.task_plan || {};
             const theme = plan.theme || '';
-            const planText = (plan.plan_text || '').substring(0, 200);
-            const points = (plan.investigation_points || []).slice(0, 5).join('、');
-            const planContent = (theme || planText || points) ? `テーマ: ${this._escapeHtml(theme)}<br>${this._escapeHtml(planText)}${planText.length >= 200 ? '...' : ''}<br>観点: ${this._escapeHtml(points)}` : '<span style="color:#666;">（なし）</span>';
+            const planText = (plan.plan_text || '').substring(0, 500);
+            const points = plan.investigation_points || [];
+            let planContent = '';
+            if (theme || planText || points.length > 0) {
+                if (theme) planContent += `<div style="margin-bottom: 0.5rem;"><strong>テーマ:</strong> ${this._escapeHtml(theme)}</div>`;
+                if (planText) planContent += `<div style="margin-bottom: 0.5rem;">${this._escapeHtml(planText)}${(plan.plan_text || '').length > 500 ? '...' : ''}</div>`;
+                if (points.length > 0) {
+                    planContent += '<div style="margin-top: 0.5rem;"><strong>観点:</strong><ul style="margin: 0.25rem 0 0 0; padding-left: 1.25rem; font-size: 0.85rem;">';
+                    points.forEach(p => {
+                        const text = typeof p === 'string' ? p : (p && p.title) ? p.title : String(p);
+                        planContent += `<li>${this._escapeHtml(text)}</li>`;
+                    });
+                    planContent += '</ul></div>';
+                }
+            } else {
+                planContent = '<span style="color:#666;">（なし）</span>';
+            }
             contextHtml += `<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">調査計画</summary><div style="padding: 0.5rem 0; font-size: 0.85rem;">${planContent}</div></details>`;
-            // 収集ソース（常に表示・開いた状態。0件の場合は「なし」）
-            const sources = interruptedState.research_data_summary || [];
-            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">収集ソース（' + sources.length + '件）</summary>';
-            if (sources.length > 0) {
-                contextHtml += '<ul style="margin: 0.25rem 0; padding-left: 1.25rem; font-size: 0.85rem; max-height: 120px; overflow-y: auto;">';
-                sources.forEach(s => {
-                    contextHtml += `<li><a href="${this._escapeHtml(s.url || '#')}" target="_blank" rel="noopener">${this._escapeHtml((s.title || '').substring(0, 60))}${(s.title || '').length > 60 ? '...' : ''}</a></li>`;
-                });
-                contextHtml += '</ul>';
-            } else {
-                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
-            }
-            contextHtml += '</details>';
-            // 現在のドラフト（常に表示・開いた状態。なければ「なし」）
-            const draftPreview = interruptedState.current_draft_preview || '';
-            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">現在のドラフト（プレビュー）</summary>';
-            if (draftPreview) {
-                contextHtml += '<pre style="margin: 0.25rem 0; padding: 0.5rem; background: #f5f5f5; border-radius: 4px; font-size: 0.8rem; white-space: pre-wrap; max-height: 150px; overflow-y: auto;">' + this._escapeHtml(draftPreview) + '</pre>';
-            } else {
-                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
-            }
-            contextHtml += '</details>';
-            // Reviewerフィードバック（常に表示。なければ「なし」）
-            const feedback = interruptedState.feedback != null && interruptedState.feedback !== '' ? (interruptedState.feedback + '').substring(0, 300) : '';
-            contextHtml += '<details open style="margin-bottom: 0.75rem;"><summary style="cursor:pointer;">Reviewerフィードバック</summary>';
-            if (feedback) {
-                contextHtml += '<div style="padding: 0.5rem 0; font-size: 0.85rem;">' + this._escapeHtml(feedback) + ((interruptedState.feedback + '').length > 300 ? '...' : '') + '</div>';
-            } else {
-                contextHtml += '<div style="padding: 0.25rem 0; font-size: 0.85rem; color:#666;">（なし）</div>';
-            }
-            contextHtml += '</details>';
         }
 
         contentEl.innerHTML = `

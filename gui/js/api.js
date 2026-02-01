@@ -43,20 +43,31 @@ class API {
     /**
      * リサーチを開始
      */
-    async createResearch(theme, maxIterations = 5, enableHumanIntervention = false) {
+    /**
+     * リサーチを開始
+     * @param {string} theme - 調査テーマ
+     * @param {number} maxIterations - 最大イテレーション数
+     * @param {boolean} enableHumanIntervention - 人間介入を有効にするか
+     * @param {string} [previousReportsContext] - 同一チャット内の既存調査レポート（考慮して計画を作成する場合）
+     */
+    async createResearch(theme, maxIterations = 5, enableHumanIntervention = false, previousReportsContext = null) {
         try {
+            const body = {
+                theme,
+                max_iterations: maxIterations,
+                enable_human_intervention: enableHumanIntervention,
+                checkpointer_type: 'memory'
+            };
+            if (previousReportsContext && previousReportsContext.trim()) {
+                body.previous_reports_context = previousReportsContext.trim();
+            }
             const response = await fetch(`${this.baseURL}/research`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 mode: 'cors',
-                body: JSON.stringify({
-                    theme,
-                    max_iterations: maxIterations,
-                    enable_human_intervention: enableHumanIntervention,
-                    checkpointer_type: 'memory'
-                })
+                body: JSON.stringify(body)
             });
 
             if (!response.ok) {
